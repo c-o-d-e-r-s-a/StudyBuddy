@@ -1,242 +1,289 @@
-export type SensingEvent = {
+/**
+ * cvSensor.ts - Simplified OpenCV.js distraction detection
+ *
+ * SIMPLIFIED FOR HACKATHON:
+ * - Distraction = excessive head movement (jitter/tilt)
+ * - No emotion detection (Haar cascades can't detect emotions)
+ * - Focus on detecting when user is moving head too much
+ * - Light-weight, runs on main thread with safeguards
+ */
+
+declare const cv: any; // OpenCV.js global
+
+export interface SensingEvent {
   ts: number;
   face_present: boolean;
   gaze: "on_screen" | "away";
-  confusion: number; // 0..1
-};
-
-type StartOptions = {
-  cascadeUrl?: string;        // default: /models/haarcascade_frontalface_default.xml
-  intervalMs?: number;        // default: 350ms
-  targetWidth?: number;       // default: 320 (downscale for speed)
-  stopCameraOnStop?: boolean; // 
-};
-
-declare global {
-  interface Window {
-    cv: any;
-  }
+  distraction: number; // 0-1, higher = more distracted (head moving)
+  processingTimeMs: number;
+  debug: {
+    headMovement: number;
+    faceDim: number;
+  };
 }
 
-function clamp01(x: number) {
-  if (!Number.isFinite(x)) return 0;
-  return Math.max(0, Math.min(1, x));
+interface CvConfig {
+  intervalMs?: number;
+  targetWidth?: number;
+  detectionIntervalMs?: number;
 }
 
-async function waitForOpenCV(): Promise<any> {
-  const cv = window.cv;
-  if (!cv) throw new Error("OpenCV not found on window. Did opencv.js load?");
-  if (cv.Mat) return cv;
-
-  await new Promise<void>((resolve, reject) => {
-    const start = Date.now();
-    const t = setInterval(() => {
-      if (window.cv && window.cv.Mat) {
-        clearInterval(t);
-        resolve();
-      } else if (Date.now() - start > 15000) {
-        clearInterval(t);
-        reject(new Error("Timed out waiting for OpenCV to initialize"));
-      }
-    }, 50);
-  });
-
-  return window.cv;
+interface DetectionState {
+  lastFaceRect: { x: number; y: number; w: number; h: number } | null;
+  lastGazeDir: "on_screen" | "away" | null;
+  movementHistory: number[]; // Track head movement over time
+  lastDetectionTime: number;
+  frameCount: number;
 }
 
-async function loadCascade(cv: any, cascadeUrl: string) {
-  const res = await fetch(cascadeUrl);
-  if (!res.ok) throw new Error(`Failed to fetch cascade: ${res.status}`);
-  const data = new Uint8Array(await res.arrayBuffer());
-
-  // Use a simple filename (OpenCV.js CascadeClassifier.load expects this style reliably)
-  const filename = "haarcascade.xml";
-
-  try {
-    cv.FS_unlink("/" + filename);
-  } catch {}
-
-  cv.FS_createDataFile("/", filename, data, true, false, false);
-
-  const classifier = new cv.CascadeClassifier();
-  const ok = classifier.load(filename);
-  if (!ok) throw new Error("CascadeClassifier.load() failed");
-
-  return classifier;
-}
-
-// ✅ NEW: Pre-initialize camera async (non-blocking)
-async function initializeCameraAsync(
-  videoEl: HTMLVideoElement,
-  options: { width?: number; height?: number } = {}
-): Promise<void> {
-  if (videoEl.srcObject) return; // Already initialized
-
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      width: { ideal: options.width ?? 640 },
-      height: { ideal: options.height ?? 480 }
-    },
-    audio: false
-  });
-
-  videoEl.srcObject = stream;
-
-  // Wait for video metadata to be loaded
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Video metadata timeout")), 5000);
-    videoEl.onloadedmetadata = () => {
-      clearTimeout(timeout);
-      videoEl.play().then(resolve).catch(reject);
-    };
-  });
-}
-
-// ✅ Export helper for React component
-export async function initCameraForSensing(videoEl: HTMLVideoElement): Promise<void> {
-  return initializeCameraAsync(videoEl);
-}
-
-// ✅ MODIFIED: startCvSensing no longer calls getUserMedia
+/**
+ * Start CV sensing loop for distraction detection
+ */
 export async function startCvSensing(
   videoEl: HTMLVideoElement,
   canvasEl: HTMLCanvasElement,
-  onEvent: (e: SensingEvent) => void,
-  opts: StartOptions = {}
-) {
-  const cascadeUrl = opts.cascadeUrl ?? "/models/haarcascade_frontalface_default.xml";
-  const intervalMs = opts.intervalMs ?? 350; // ✅ slower default
-  const targetWidth = opts.targetWidth ?? 320; // ✅ downscale for speed
-  const stopCameraOnStop = opts.stopCameraOnStop ?? true;
-
-  const cv = await waitForOpenCV();
-  const classifier = await loadCascade(cv, cascadeUrl);
-
-  let lastRect: { x: number; y: number; w: number; h: number } | null = null;
-  let lastFaceSeenTs = Date.now();
-  let jitterScore = 0;
-
-  let stopped = false;
-  let timer: any = null;
-  let processing = false; // ✅ prevents overlap
-
-  // ✅ CHANGED: Expect camera to be pre-initialized by caller
-  if (!videoEl.srcObject) {
-    throw new Error("Video element must have a stream before calling startCvSensing. Call initCameraForSensing first.");
+  onEvent: (event: SensingEvent) => void,
+  config: CvConfig = {}
+): Promise<() => void> {
+  // Validate OpenCV is loaded
+  if (typeof cv === "undefined") {
+    throw new Error("OpenCV.js not loaded.");
   }
 
-  const processFrame = () => {
-    if (stopped || processing) return;
-    processing = true;
+  const {
+    intervalMs = 350,
+    targetWidth = 240,
+    detectionIntervalMs = 500,
+  } = config;
+
+  // Load face cascade
+  let faceCascade: any;
+  try {
+    // OpenCV.js built-in cascade (synchronous)
+    // If this fails, we'll use a simple fallback
+    faceCascade = null; // Will use detectMultiScale directly
+  } catch (e) {
+    console.warn("⚠️ Could not load face cascade");
+  }
+
+  const state: DetectionState = {
+    lastFaceRect: null,
+    lastGazeDir: null,
+    movementHistory: [],
+    lastDetectionTime: 0,
+    frameCount: 0,
+  };
+
+  let isProcessing = false;
+  let shouldStop = false;
+  const timingWindow: number[] = [];
+  const maxTimingHistory = 10;
+
+  const stop = () => {
+    shouldStop = true;
+    console.log("🛑 CV sensing stopped");
+  };
+
+  // Main loop
+  const loop = () => {
+    if (shouldStop) return;
+
+    requestAnimationFrame(loop);
+
+    // Throttle
+    const now = performance.now();
+    if (now - state.lastDetectionTime < intervalMs) {
+      return;
+    }
+
+    // Prevent overlap
+    if (isProcessing) {
+      console.warn("⚠️ Previous frame still processing");
+      return;
+    }
+
+    isProcessing = true;
+    const processingStart = performance.now();
 
     try {
-      const vw = videoEl.videoWidth;
-      const vh = videoEl.videoHeight;
-      if (!vw || !vh) return;
+      const event = processFrame(videoEl, canvasEl, state, {
+        targetWidth,
+        detectionIntervalMs,
+      });
 
-      // ✅ Downscale for detection speed
-      const scale = targetWidth / vw;
-      const w = Math.max(1, Math.floor(vw * scale));
-      const h = Math.max(1, Math.floor(vh * scale));
+      if (event) {
+        const processingTimeMs = performance.now() - processingStart;
+        event.processingTimeMs = processingTimeMs;
 
-      canvasEl.width = w;
-      canvasEl.height = h;
+        timingWindow.push(processingTimeMs);
+        if (timingWindow.length > maxTimingHistory) {
+          timingWindow.shift();
+        }
 
-      const ctx = canvasEl.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return;
+        const avgProcessingTime =
+          timingWindow.reduce((a, b) => a + b, 0) / timingWindow.length;
+        if (avgProcessingTime > intervalMs * 0.8) {
+          console.error(
+            `⚠️ CV too slow (${avgProcessingTime.toFixed(0)}ms). Stopping.`
+          );
+          stop();
+          return;
+        }
 
-      ctx.drawImage(videoEl, 0, 0, w, h);
+        onEvent(event);
+      }
+    } catch (err) {
+      console.error("❌ CV error:", err);
+      stop();
+    } finally {
+      isProcessing = false;
+    }
+  };
 
-      const src = cv.imread(canvasEl);
-      const gray = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+  requestAnimationFrame(loop);
+
+  return stop;
+}
+
+/**
+ * Process frame for distraction detection
+ * Distraction = head movement (jitter/tilt changes rapidly)
+ */
+function processFrame(
+  videoEl: HTMLVideoElement,
+  canvasEl: HTMLCanvasElement,
+  state: DetectionState,
+  config: {
+    targetWidth: number;
+    detectionIntervalMs: number;
+  }
+): SensingEvent | null {
+  const ts = Date.now();
+
+  try {
+    // Read frame
+    const cap = new cv.VideoCapture(videoEl);
+    const frame = new cv.Mat(videoEl.videoHeight, videoEl.videoWidth, cv.CV_8UC4);
+    cap.read(frame);
+
+    // Downscale
+    const ratio = frame.cols / config.targetWidth;
+    const scaledWidth = config.targetWidth;
+    const scaledHeight = Math.floor(frame.rows / ratio);
+    const scaled = new cv.Mat();
+    cv.resize(frame, scaled, new cv.Size(scaledWidth, scaledHeight));
+
+    // Convert to grayscale
+    const gray = new cv.Mat();
+    cv.cvtColor(scaled, gray, cv.COLOR_RGBA2GRAY);
+
+    // ===== FACE DETECTION =====
+    let faceRect: { x: number; y: number; w: number; h: number } | null = null;
+    const now = performance.now();
+
+    if (now - state.lastDetectionTime >= config.detectionIntervalMs) {
+      state.lastDetectionTime = now;
 
       const faces = new cv.RectVector();
-      const msize = new cv.Size(0, 0);
+      cv.detectMultiScale(
+        gray,
+        faces,
+        1.1, // scaleFactor
+        4, // minNeighbors (higher = stricter)
+        0,
+        new cv.Size(30, 30)
+      );
 
-      // ✅ Slightly more conservative params reduce CPU and false positives
-      classifier.detectMultiScale(gray, faces, 1.15, 4, 0, msize, msize);
-
-      const ts = Date.now();
-
-      const face_present = faces.size() > 0;
-      let gaze: "on_screen" | "away" = "away";
-      let confusion = 0;
-
-      if (face_present) {
-        lastFaceSeenTs = ts;
-        gaze = "on_screen";
-
-        // Pick largest face
-        let bestIdx = 0;
-        let bestArea = 0;
-        for (let i = 0; i < faces.size(); i++) {
-          const r = faces.get(i);
-          const area = r.width * r.height;
-          if (area > bestArea) {
-            bestArea = area;
-            bestIdx = i;
-          }
-        }
-
-        const r = faces.get(bestIdx);
-        const rect = { x: r.x, y: r.y, w: r.width, h: r.height };
-
-        // Jitter proxy
-        if (lastRect) {
-          const dx = Math.abs(rect.x - lastRect.x);
-          const dy = Math.abs(rect.y - lastRect.y);
-          const dw = Math.abs(rect.w - lastRect.w);
-          const dh = Math.abs(rect.h - lastRect.h);
-
-          const norm = Math.max(1, rect.w + rect.h);
-          const jump = (dx + dy + dw + dh) / norm;
-          jitterScore = jitterScore * 0.85 + jump * 0.6;
-        } else {
-          jitterScore = jitterScore * 0.85;
-        }
-
-        lastRect = rect;
-        confusion = clamp01(jitterScore);
-      } else {
-        const awayMs = ts - lastFaceSeenTs;
-        gaze = awayMs > 900 ? "away" : "on_screen";
-
-        const ramp = (awayMs - 1500) / 3000;
-        confusion = clamp01(ramp * 0.8);
-
-        jitterScore = jitterScore * 0.85;
-        lastRect = null;
+      if (faces.size() > 0) {
+        const rect = faces.get(0);
+        faceRect = {
+          x: Math.round(rect.x * ratio),
+          y: Math.round(rect.y * ratio),
+          w: Math.round(rect.width * ratio),
+          h: Math.round(rect.height * ratio),
+        };
       }
-
-      onEvent({ ts, face_present, gaze, confusion });
-
-      // Cleanup
-      src.delete();
-      gray.delete();
       faces.delete();
-      msize.delete();
-    } catch (err) {
-      console.error("CV processFrame error:", err);
-    } finally {
-      processing = false;
-    }
-  };
-
-  timer = setInterval(processFrame, intervalMs);
-
-  return () => {
-    stopped = true;
-    if (timer) clearInterval(timer);
-
-    if (stopCameraOnStop) {
-      const stream = videoEl.srcObject as MediaStream | null;
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-      videoEl.srcObject = null;
     }
 
-    try {
-      classifier.delete?.();
-    } catch {}
-  };
+    // ===== DISTRACTION DETECTION: HEAD MOVEMENT =====
+    let headMovement = 0;
+    if (faceRect && state.lastFaceRect) {
+      // Calculate movement from last frame
+      const dx = faceRect.x - state.lastFaceRect.x;
+      const dy = faceRect.y - state.lastFaceRect.y;
+      headMovement = Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // Track movement history (keep last 20 frames)
+    state.movementHistory.push(headMovement);
+    if (state.movementHistory.length > 20) {
+      state.movementHistory.shift();
+    }
+
+    // Calculate distraction score
+    // High movement = high distraction
+    const avgMovement =
+      state.movementHistory.reduce((a, b) => a + b, 0) /
+      state.movementHistory.length;
+    const movementVariance =
+      state.movementHistory.length > 1
+        ? Math.sqrt(
+            state.movementHistory.reduce(
+              (sum, m) => sum + Math.pow(m - avgMovement, 2),
+              0
+            ) / state.movementHistory.length
+          )
+        : 0;
+
+    // Distraction = high average movement or high variance (jittery)
+    // Normalize: >20px average or >15px variance = distracted
+    const movementScore = Math.min(1, avgMovement / 20);
+    const varianceScore = Math.min(1, movementVariance / 15);
+    let distractionScore = (movementScore + varianceScore) / 2;
+
+    // If no face detected, high distraction
+    const facePresent = faceRect !== null || state.lastFaceRect !== null;
+    if (!facePresent) {
+      distractionScore = 0.8; // Face not visible = distracted
+    }
+
+    // ===== GAZE DETECTION =====
+    let gaze: "on_screen" | "away" = "on_screen";
+    const currentFaceRect = faceRect || state.lastFaceRect;
+    if (currentFaceRect) {
+      const faceCenterX = currentFaceRect.x + currentFaceRect.w / 2;
+      const frameWidthScaled = scaledWidth;
+      const centerThreshold = frameWidthScaled * 0.3;
+
+      if (Math.abs(faceCenterX - frameWidthScaled / 2) > centerThreshold) {
+        gaze = "away";
+      }
+    }
+
+    // Update refs
+    state.lastFaceRect = currentFaceRect;
+    state.lastGazeDir = gaze;
+    state.frameCount++;
+
+    // Cleanup
+    frame.delete();
+    scaled.delete();
+    gray.delete();
+
+    return {
+      ts,
+      face_present: facePresent,
+      gaze,
+      distraction: distractionScore,
+      processingTimeMs: 0, // Set by caller
+      debug: {
+        headMovement: avgMovement,
+        faceDim: currentFaceRect?.w ?? 0,
+      },
+    };
+  } catch (err) {
+    console.error("❌ Frame processing error:", err);
+    return null;
+  }
 }

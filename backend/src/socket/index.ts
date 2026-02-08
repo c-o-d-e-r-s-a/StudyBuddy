@@ -96,6 +96,7 @@ export function registerSocketHandlers(io: Server) {
   io.on("connection", (socket: Socket) => {
     const s = getSession(socket.id);
 
+
     socket.on("presage_event", (e: PresageEvent) => {
       if (
         !e ||
@@ -113,6 +114,8 @@ export function registerSocketHandlers(io: Server) {
       s.confusionTriggers += 1;
       socket.emit("confusion_ack", { ts: typeof ts === "number" ? ts : Date.now() });
     });
+
+    
 
     socket.on("end_session", () => {
       socket.emit("session_summary", sessionSummary(s));

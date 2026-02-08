@@ -5,7 +5,6 @@ import { io, Socket } from "socket.io-client";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
 
-// ✅ OpenCV sensing module
 import { startCvSensing, SensingEvent } from "@/src/lib/cvSensor";
 import { recordAndTranscribe } from "@/src/lib/audioProcessing";
 
@@ -21,23 +20,26 @@ export default function StudyPage() {
   const [cvReady, setCvReady] = useState(false);
   const [sensingEnabled, setSensingEnabled] = useState(false);
 
-  // ✅ Camera initialization state
+  // ✅ Camera state
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
   // ✅ Audio recording state
   const [isRecording, setIsRecording] = useState(false);
 
+  // ✅ Distraction metrics (SIMPLIFIED - no confusion)
+  const [lastDistraction, setLastDistraction] = useState<number>(0);
+  const [lastGaze, setLastGaze] = useState<"on_screen" | "away">("on_screen");
+  const [processingTimeMs, setProcessingTimeMs] = useState(0);
+
   // ✅ Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stopCvRef = useRef<null | (() => void)>(null);
   const socketInitialized = useRef(false);
-  const confusedStartRef = useRef<number | null>(null);
-  const lastTriggerTimesRef = useRef<number[]>([]);
   const cameraInitStartedRef = useRef(false);
 
-  // ✅ Audio streaming refs
+  // ✅ Audio refs
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
@@ -45,54 +47,44 @@ export default function StudyPage() {
   const queueRef = useRef<ArrayBuffer[]>([]);
   const audioEndedRef = useRef(false);
 
-  // ✅ Sensing event state
-  const [lastConfusion, setLastConfusion] = useState<number>(0);
-  const [lastGaze, setLastGaze] = useState<"on_screen" | "away">("on_screen");
-
   // ==================== CAMERA INITIALIZATION ====================
-  // ✅ ONE-TIME camera init (CRITICAL: Not in useEffect dependency loop!)
-  useEffect(() => {
+  const initializeCamera = async () => {
     if (cameraInitStartedRef.current || !cvReady) return;
     cameraInitStartedRef.current = true;
 
-    (async () => {
-      try {
-        console.log("📷 Requesting camera permission...");
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
-        });
+    try {
+      console.log("📷 Requesting camera permission...");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
 
-        if (!videoRef.current) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        videoRef.current.srcObject = stream;
-        
-        // Wait for metadata
-        await new Promise<void>((resolve) => {
-          const onLoadedMetadata = () => {
-            videoRef.current?.removeEventListener("loadedmetadata", onLoadedMetadata);
-            resolve();
-          };
-          videoRef.current?.addEventListener("loadedmetadata", onLoadedMetadata);
-          videoRef.current?.play().catch(() => {});
-        });
-
-        console.log("✅ Camera ready");
-        setCameraReady(true);
-        setCameraError(null);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error("❌ Camera error:", msg);
-        setCameraError(msg);
-        setCameraReady(false);
+      if (!videoRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
-    })();
 
-    return () => {};
-  }, [cvReady]);
+      videoRef.current.srcObject = stream;
+
+      await new Promise<void>((resolve) => {
+        const onLoadedMetadata = () => {
+          videoRef.current?.removeEventListener("loadedmetadata", onLoadedMetadata);
+          resolve();
+        };
+        videoRef.current?.addEventListener("loadedmetadata", onLoadedMetadata);
+        videoRef.current?.play().catch(() => {});
+      });
+
+      console.log("✅ Camera ready");
+      setCameraReady(true);
+      setCameraError(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ Camera error:", msg);
+      setCameraError(msg);
+      setCameraReady(false);
+    }
+  };
 
   // ==================== SENSING TOGGLE ====================
   useEffect(() => {
@@ -114,7 +106,7 @@ export default function StudyPage() {
           (e) => {
             if (!cancelled) handleSensingEvent(e);
           },
-          { intervalMs: 350, targetWidth: 320 }
+          { intervalMs: 350, targetWidth: 320, detectionIntervalMs: 500 }
         );
 
         if (!cancelled) stopCvRef.current = stop;
@@ -140,7 +132,7 @@ export default function StudyPage() {
     const s = io("http://localhost:3001", {
       transports: ["websocket"],
       reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+      reconnectionDelay: 1000,
     });
 
     s.on("connect", () => {
@@ -182,10 +174,6 @@ export default function StudyPage() {
       setAnswer("Error: " + error);
       setIsStreaming(false);
       cleanupAudio();
-    });
-
-    s.on("presage_event", (e) => {
-      console.log("📊 Presage event:", e);
     });
 
     setSocket(s);
@@ -277,37 +265,32 @@ export default function StudyPage() {
   };
 
   // ==================== SENSING EVENTS ====================
+  // ✅ SIMPLIFIED: Only track distraction (head movement)
   function handleSensingEvent(e: SensingEvent) {
-    setLastConfusion(e.confusion);
+    setLastDistraction(e.distraction);
     setLastGaze(e.gaze);
+    setProcessingTimeMs(e.processingTimeMs);
 
+    // Send to backend for logging
     if (socket?.connected) {
-      socket.emit("presage_event", e);
-    }
-
-    // ✅ Auto-clarification on sustained confusion
-    if (e.confusion > 0.6) {
-      if (!confusedStartRef.current) confusedStartRef.current = e.ts;
-      
-      if (e.ts - (confusedStartRef.current ?? 0) > 3000) {
-        const windowMs = 5 * 60 * 1000;
-        lastTriggerTimesRef.current = lastTriggerTimesRef.current.filter(
-          (t) => e.ts - t < windowMs
-        );
-
-        if (lastTriggerTimesRef.current.length < 2 && socket?.connected) {
-          console.log("🤔 Detected confusion, requesting clarification...");
-          socket.emit("user_confused", { ts: e.ts });
-          lastTriggerTimesRef.current.push(e.ts);
-          confusedStartRef.current = null;
-        }
-      }
-    } else {
-      confusedStartRef.current = null;
+      socket.emit("presage_event", {
+        ts: e.ts,
+        face_present: e.face_present,
+        gaze: e.gaze,
+        distraction: e.distraction,
+      });
     }
   }
 
   // ==================== ACTIONS ====================
+  const handleStartSensing = async () => {
+    if (!cameraReady) {
+      console.log("📷 Initializing camera...");
+      await initializeCamera();
+    }
+    setSensingEnabled(true);
+  };
+
   const askQuestion = () => {
     if (!question.trim()) return alert("Enter a question");
     if (!socket?.connected) return alert("Not connected");
@@ -327,13 +310,15 @@ export default function StudyPage() {
       setIsRecording(true);
       console.log("🎤 Recording...");
       const text = await recordAndTranscribe(5000);
-      
+
       if (text.trim()) {
         setQuestion(text);
         setAnswer("");
         setIsStreaming(true);
         initMSE();
         socket.emit("ask_stream", { question: text });
+      } else {
+        alert("No speech detected");
       }
     } catch (err) {
       console.error("❌ Recording error:", err);
@@ -350,7 +335,7 @@ export default function StudyPage() {
   };
 
   return (
-    <div style={{ padding: 16, maxWidth: 1000 }}>
+    <div style={{ padding: 16, maxWidth: 1200 }}>
       <Script
         src="https://docs.opencv.org/4.x/opencv.js"
         strategy="afterInteractive"
@@ -374,49 +359,65 @@ export default function StudyPage() {
             <b>OpenCV:</b> {cvReady ? "✅ Loaded" : "⏳ Loading"}
           </span>
           <span style={{ marginLeft: 20 }}>
-            <b>Camera:</b> {cameraReady ? "✅ Ready" : cameraError ? "❌ Error" : "⏳ Init"}
+            <b>Camera:</b>{" "}
+            {cameraReady ? "✅ Ready" : cameraError ? "❌ Error" : "⏳ Not init"}
           </span>
         </div>
-        {cameraError && <div style={{ color: "red", marginTop: 8, fontSize: 12 }}>Error: {cameraError}</div>}
+        {cameraError && (
+          <div style={{ color: "red", marginTop: 8, fontSize: 12 }}>
+            Error: {cameraError}
+          </div>
+        )}
       </div>
 
-      {/* ✅ SENSING SECTION */}
+      {/* ✅ DISTRACTION SENSING SECTION */}
       <div
         style={{
           marginTop: 16,
           padding: 12,
           border: "1px solid #ddd",
           borderRadius: 10,
-          backgroundColor: sensingEnabled ? "#f0f8f0" : "#f9f9f9"
+          backgroundColor: sensingEnabled ? "#f0f8f0" : "#f9f9f9",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>🎥 Attention Sensing</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>📹 Distraction Detection</div>
             <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
-              Camera monitors attention & auto-clarifies if confusion detected
+              Monitors head movement to detect distraction
             </div>
             {sensingEnabled && (
-              <div style={{ fontSize: 11, color: "#444", marginTop: 6 }}>
-                <b>Live:</b> gaze={lastGaze} | confusion={lastConfusion.toFixed(2)}
+              <div style={{ fontSize: 11, color: "#444", marginTop: 6, fontFamily: "monospace" }}>
+                <div>
+                  <b>Distraction:</b> {(lastDistraction * 100).toFixed(0)}% | <b>Gaze:</b> {lastGaze}
+                </div>
+                <div>
+                  <b>Processing:</b> {processingTimeMs.toFixed(1)}ms
+                </div>
               </div>
             )}
           </div>
           <button
-            onClick={() => setSensingEnabled(!sensingEnabled)}
+            onClick={() => {
+              if (!sensingEnabled) {
+                handleStartSensing();
+              } else {
+                setSensingEnabled(false);
+              }
+            }}
             style={{
               padding: "10px 14px",
               borderRadius: 8,
               border: "none",
               backgroundColor: sensingEnabled ? "#ff6b6b" : "#4CAF50",
               color: "white",
-              cursor: cameraReady ? "pointer" : "not-allowed",
-              opacity: cameraReady ? 1 : 0.5,
-              fontWeight: "bold"
+              cursor: cvReady ? "pointer" : "not-allowed",
+              opacity: cvReady ? 1 : 0.5,
+              fontWeight: "bold",
             }}
-            disabled={!cameraReady}
+            disabled={!cvReady}
           >
-            {sensingEnabled ? "🔴 Stop" : "🎥 Start"}
+            {sensingEnabled ? "🔴 Stop" : "📹 Start"}
           </button>
         </div>
       </div>
@@ -434,7 +435,7 @@ export default function StudyPage() {
             padding: 12,
             borderRadius: 8,
             border: "1px solid #ccc",
-            fontSize: 14
+            fontSize: 14,
           }}
           disabled={!isConnected || isStreaming}
         />
@@ -447,12 +448,12 @@ export default function StudyPage() {
             border: "none",
             backgroundColor: isRecording ? "#ff9800" : "#2196F3",
             color: "white",
-            cursor: isConnected ? "pointer" : "not-allowed",
-            opacity: isConnected ? 1 : 0.5,
-            fontWeight: "bold"
+            cursor: isConnected && !isStreaming ? "pointer" : "not-allowed",
+            opacity: isConnected && !isStreaming ? 1 : 0.5,
+            fontWeight: "bold",
           }}
-          disabled={!isConnected}
-          title="Record voice question"
+          disabled={!isConnected || isStreaming}
+          title="Record voice question (5 seconds)"
         >
           {isRecording ? "🎤 Recording..." : "🎤 Voice"}
         </button>
@@ -467,7 +468,7 @@ export default function StudyPage() {
             color: "white",
             cursor: isConnected && !isStreaming && question.trim() ? "pointer" : "not-allowed",
             opacity: isConnected && !isStreaming && question.trim() ? 1 : 0.5,
-            fontWeight: "bold"
+            fontWeight: "bold",
           }}
           disabled={!isConnected || isStreaming || !question.trim()}
         >
@@ -482,7 +483,7 @@ export default function StudyPage() {
             border: "1px solid #333",
             backgroundColor: "transparent",
             cursor: isConnected ? "pointer" : "not-allowed",
-            opacity: isConnected ? 1 : 0.5
+            opacity: isConnected ? 1 : 0.5,
           }}
           disabled={!isConnected}
         >
@@ -503,10 +504,10 @@ export default function StudyPage() {
             backgroundColor: "#f9f9f9",
             fontSize: 14,
             lineHeight: 1.6,
-            color: answer ? "#000" : "#999"
+            color: answer ? "#000" : "#999",
           }}
         >
-          {answer || (isConnected ? "Upload notes via curl, then ask..." : "Connecting...")}
+          {answer || (isConnected ? "📝 Ask a question to get started..." : "🔌 Connecting...")}
         </pre>
       </div>
 
