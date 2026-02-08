@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Test</title>
+  <script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+</head>
+<body>
+  <h1>WebSocket Streaming Test</h1>
+  <button id="testBtn">Start Test Stream</button>
+  <div id="output"></div>
+
+  <script>
+    const socket = io("http://localhost:3001");
+    const output = document.getElementById("output");
+    const testBtn = document.getElementById("testBtn");
+
+    socket.on("connect", () => {
+      console.log("Connected to server");
+      output.innerHTML += "<p>✅ Connected to server</p>";
+    });
+
+    socket.on("stream_chunk", (data) => {
+      console.log("Received chunk:", data);
+      output.innerHTML += `<p>📦 ${data}</p>`;
+    });
+
+    socket.on("stream_end", () => {
+      console.log("Stream ended");
+      output.innerHTML += "<p>🏁 Stream ended</p>";
+    });
+
+    testBtn.addEventListener("click", () => {
+      output.innerHTML = "<p>🚀 Starting stream...</p>";
+      socket.emit("test_stream");
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+function dot(a: number[], b: number[]) {
+  if (a.length !== b.length) {
+    console.error(`Vector mismatch: ${a.length} vs ${b.length}`);
+    return 0;
+  }
+  let s = 0;
+  for (let i = 0; i < a.length; i++) {
+    s += (a[i] ?? 0) * (b[i] ?? 0);//we got to check this line if something goes wrong
+  }
+  return s;
+}
+
+function norm(a: number[]) {
+  return Math.sqrt(dot(a, a));
+}
+
+function cosine(a: number[], b: number[]) {
+  const na = norm(a);
+  const nb = norm(b);
+  if (!na || !nb) return 0;
+  return dot(a, b) / (na * nb);
+}
+
+export type ChunkRecord = {
+  id: string;
+  text: string;
+  embedding: number[];
+  meta?: { source?: string };
+};
+
+const store: ChunkRecord[] = [];
+
+export function addChunks(chunks: ChunkRecord[]) {
+  store.push(...chunks);
+}
+
+export function searchTopK(queryEmbedding: number[], k = 5) {
+  const scored = store.map((r) => ({
+    record: r,
+    score: cosine(queryEmbedding, r.embedding)
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, k);
+}
+
+export function getStoreSize() {
+  return store.length;
+}
