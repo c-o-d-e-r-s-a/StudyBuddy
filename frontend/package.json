@@ -1,25 +1,16 @@
 {
-  "name": "frontend",
-  "version": "0.1.0",
-  "private": true,
+  "name": "studybuddy",
+  "version": "1.0.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "demo": "npm run build && npm start"
   },
   "dependencies": {
-    "multer": "^2.0.2",
-    "next": "^16.1.6",
-    "react": "^18",
-    "react-dom": "^18",
-    "socket.io-client": "^4.8.3"
-  },
-  "devDependencies": {
-    "@types/multer": "^2.0.0",
-    "@types/node": "20.19.32",
-    "@types/react": "18.3.28",
-    "@types/react-dom": "^18",
-    "typescript": "5.9.3"
+    "next": "^14.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "socket.io-client": "^4.7.0"
   }
 }
