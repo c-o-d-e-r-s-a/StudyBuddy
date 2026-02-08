@@ -9,7 +9,7 @@ type StartOptions = {
   cascadeUrl?: string;        // default: /models/haarcascade_frontalface_default.xml
   intervalMs?: number;        // default: 350ms
   targetWidth?: number;       // default: 320 (downscale for speed)
-  stopCameraOnStop?: boolean; // default: true
+  stopCameraOnStop?: boolean; // 
 };
 
 declare global {
