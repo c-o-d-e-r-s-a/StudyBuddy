@@ -6,7 +6,11 @@ import { useRouter } from "next/navigation";
 import Script from "next/script";
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 import { startCvSensing, SensingEvent } from "@/src/lib/cvSensor";
+=======
+import { SimulatedSensingEngine } from "@/src/lib/simulatedSensing";
+>>>>>>> Stashed changes
 =======
 import { SimulatedSensingEngine } from "@/src/lib/simulatedSensing";
 >>>>>>> Stashed changes
@@ -32,9 +36,15 @@ export default function StudyPage() {
   const [distraction, setDistraction] = useState(0);
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
   // ✅ Camera state
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+=======
+  // === Notes ===
+  const [notesReady, setNotesReady] = useState(false);
+  const [notesFile, setNotesFile] = useState<string | null>(null);
+>>>>>>> Stashed changes
 =======
   // === Notes ===
   const [notesReady, setNotesReady] = useState(false);
@@ -47,6 +57,7 @@ export default function StudyPage() {
   const [isThinking, setIsThinking] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [recentQuestions, setRecentQuestions] = useState<Question[]>([]);
+<<<<<<< Updated upstream
 
 <<<<<<< Updated upstream
   // ✅ Distraction metrics (SIMPLIFIED - no confusion)
@@ -67,11 +78,21 @@ export default function StudyPage() {
   const [isListening, setIsListening] = useState(false);
   const [listeningCountdown, setListeningCountdown] = useState(0);
 
+=======
+
+  // === Audio/Recording ===
+  const [isListening, setIsListening] = useState(false);
+  const [listeningCountdown, setListeningCountdown] = useState(0);
+
+>>>>>>> Stashed changes
   // === Internals ===
   const socketInitRef = useRef(false);
   const sensingEngineRef = useRef<SimulatedSensingEngine | null>(null);
   const sensingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const confusionTimestampRef = useRef<number | null>(null);
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
@@ -80,6 +101,7 @@ export default function StudyPage() {
   const queueRef = useRef<ArrayBuffer[]>([]);
   const audioEndedRef = useRef(false);
 
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
   // ==================== CAMERA INITIALIZATION ====================
   const initializeCamera = async () => {
@@ -190,6 +212,77 @@ export default function StudyPage() {
 
   // ==================== SIMULATED SENSING ====================
   useEffect(() => {
+=======
+  // ==================== SOCKET CONNECTION ====================
+  useEffect(() => {
+    if (socketInitRef.current) return;
+    socketInitRef.current = true;
+
+    try {
+      const s = io("http://localhost:3001", {
+        transports: ["websocket"],
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+      });
+
+      s.on("connect", () => {
+        console.log("[StudyBuddy] Connected");
+      });
+
+      s.on("disconnect", () => {
+        console.log("[StudyBuddy] Disconnected");
+      });
+
+      s.on("stream_chunk", (data: string) => {
+        setAnswer((prev) => prev + data);
+      });
+
+      s.on("stream_end", () => {
+        setIsThinking(false);
+        setIsSpeaking(true);
+        // Audio is now playing, speaking indicator stays until audio_end
+      });
+
+      s.on("audio_chunk", (data: ArrayBuffer) => {
+        pushAudioChunk(data);
+      });
+
+      s.on("audio_end", () => {
+        audioEndedRef.current = true;
+        flushQueueIfPossible();
+        setIsSpeaking(false);
+      });
+
+      s.on("session_summary", () => {
+        try {
+          router.push("/dashboard");
+        } catch (err) {
+          console.error("[StudyBuddy] Navigation error:", err);
+        }
+      });
+
+      s.on("stream_error", (error: string) => {
+        console.error("[StudyBuddy] Stream error:", error);
+        setIsThinking(false);
+        setAnswer("I encountered an issue. Please try again.");
+      });
+
+      setSocket(s);
+
+      return () => {
+        socketInitRef.current = false;
+        s.off();
+        s.close();
+        cleanupAudio();
+      };
+    } catch (err) {
+      console.error("[StudyBuddy] Socket setup failed:", err);
+    }
+  }, [router]);
+
+  // ==================== SIMULATED SENSING ====================
+  useEffect(() => {
+>>>>>>> Stashed changes
     if (!sessionActive) {
       if (sensingIntervalRef.current) clearInterval(sensingIntervalRef.current);
       sensingEngineRef.current = null;
@@ -205,6 +298,7 @@ export default function StudyPage() {
       const event = sensingEngineRef.current!.getEvent();
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         const stop = await startCvSensing(
           videoRef.current,
           canvasRef.current,
@@ -219,6 +313,8 @@ export default function StudyPage() {
         console.error("❌ CV start failed:", err);
         if (!cancelled) setSensingEnabled(false);
 =======
+=======
+>>>>>>> Stashed changes
       // Determine state from distraction
       let state: StudentState = "confident";
       if (event.distraction < 0.3) {
@@ -227,6 +323,9 @@ export default function StudyPage() {
         state = "distracted";
       } else {
         state = "confused";
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
       }
 
@@ -263,12 +362,18 @@ export default function StudyPage() {
       console.log("[StudyBuddy] Confusion detected, offering help...");
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     console.log("🔌 Connecting to backend...");
     const s = io("http://localhost:3001", {
       transports: ["websocket"],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
     });
+=======
+      if (socket?.connected) {
+        setIsThinking(true);
+        initMSE();
+>>>>>>> Stashed changes
 =======
       if (socket?.connected) {
         setIsThinking(true);
@@ -330,6 +435,7 @@ export default function StudyPage() {
       initMSE();
       setIsListening(false);
       setListeningCountdown(0);
+<<<<<<< Updated upstream
 
 <<<<<<< Updated upstream
     setSocket(s);
@@ -345,6 +451,12 @@ export default function StudyPage() {
       if (socket?.connected) {
         socket.emit("ask_stream", { question: transcript });
 
+=======
+
+      if (socket?.connected) {
+        socket.emit("ask_stream", { question: transcript });
+
+>>>>>>> Stashed changes
         // Track question
         setRecentQuestions((prev) => [
           {
@@ -361,6 +473,9 @@ export default function StudyPage() {
       setListeningCountdown(0);
     }
   };
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 
   // ==================== AUDIO STREAMING ====================
@@ -448,6 +563,7 @@ export default function StudyPage() {
   };
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
   // ==================== SENSING EVENTS ====================
   // ✅ SIMPLIFIED: Only track distraction (head movement)
   function handleSensingEvent(e: SensingEvent) {
@@ -480,6 +596,9 @@ export default function StudyPage() {
     if (!socket?.connected) return alert("Not connected");
 =======
   // ==================== ACTIONS ====================
+=======
+  // ==================== ACTIONS ====================
+>>>>>>> Stashed changes
   const handleStartSession = () => {
     if (!notesReady) {
       alert("Please upload or use sample notes first");
@@ -487,6 +606,9 @@ export default function StudyPage() {
     }
     setSessionActive(true);
   };
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 
   const handleUploadNotes = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -568,6 +690,7 @@ Photosynthesis is the process by which plants convert light energy into chemical
 
     try {
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
       setIsRecording(true);
       console.log("🎤 Recording...");
       const text = await recordAndTranscribe(5000);
@@ -581,6 +704,8 @@ Photosynthesis is the process by which plants convert light energy into chemical
       } else {
         alert("No speech detected");
 =======
+=======
+>>>>>>> Stashed changes
       setIsListening(true);
       setListeningCountdown(5);
 
@@ -590,6 +715,9 @@ Photosynthesis is the process by which plants convert light energy into chemical
         setIsListening(false);
         setListeningCountdown(0);
         return;
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
       }
 
@@ -633,6 +761,7 @@ Photosynthesis is the process by which plants convert light energy into chemical
 
   return (
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <Script
         src="https://docs.opencv.org/4.x/opencv.js"
@@ -647,11 +776,16 @@ Photosynthesis is the process by which plants convert light energy into chemical
         }}
       />
 =======
+=======
+>>>>>>> Stashed changes
     <div style={styles.root}>
       {/* ===== BACKGROUND ===== */}
       <div style={styles.bgGradient} />
       <div style={styles.bgGlow1} />
       <div style={styles.bgGlow2} />
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 
       {/* ===== MAIN CONTENT ===== */}
@@ -662,6 +796,7 @@ Photosynthesis is the process by which plants convert light energy into chemical
           <p style={styles.subtitle}>Your AI Study Companion</p>
         </header>
 
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
       {/* ✅ STATUS BAR */}
       <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
@@ -826,6 +961,38 @@ Photosynthesis is the process by which plants convert light energy into chemical
       {/* ✅ HIDDEN ELEMENTS */}
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
       <canvas ref={canvasRef} style={{ display: "none" }} />
+=======
+        {!sessionActive ? (
+          // ===== SETUP SCREEN ===== 
+          <SetupScreen
+            notesReady={notesReady}
+            notesFile={notesFile}
+            onUploadNotes={handleUploadNotes}
+            onUseSampleNotes={handleUseSampleNotes}
+            onStartSession={handleStartSession}
+          />
+        ) : (
+          // ===== STUDY SCREEN =====
+          <StudyScreen
+            studentState={studentState}
+            distraction={distraction}
+            notesReady={notesReady}
+            currentQuestion={currentQuestion}
+            answer={answer}
+            isThinking={isThinking}
+            isSpeaking={isSpeaking}
+            isListening={isListening}
+            listeningCountdown={listeningCountdown}
+            recentQuestions={recentQuestions}
+            onQuestionChange={setCurrentQuestion}
+            onAskQuestion={handleAskQuestion}
+            onVoiceInput={handleVoiceInput}
+            onRecentQuestion={handleRecentQuestion}
+            onEndSession={handleEndSession}
+          />
+        )}
+      </div>
+>>>>>>> Stashed changes
 =======
         {!sessionActive ? (
           // ===== SETUP SCREEN ===== 
