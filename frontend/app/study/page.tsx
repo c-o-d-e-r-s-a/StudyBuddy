@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
@@ -28,7 +28,7 @@ export default function StudyPage() {
   // ✅ Audio recording state
   const [isRecording, setIsRecording] = useState(false);
 
-  // ✅ Refs
+  // ✅ Refs - CRITICAL FIX: Use refs instead of state for frequent updates
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stopCvRef = useRef<null | (() => void)>(null);
@@ -45,12 +45,16 @@ export default function StudyPage() {
   const queueRef = useRef<ArrayBuffer[]>([]);
   const audioEndedRef = useRef(false);
 
-  // ✅ Sensing event state
-  const [lastConfusion, setLastConfusion] = useState<number>(0);
-  const [lastGaze, setLastGaze] = useState<"on_screen" | "away">("on_screen");
+  // ✅ CRITICAL FIX: Use refs for sensing data to PREVENT re-renders
+  const lastConfusionRef = useRef<number>(0);
+  const lastGazeRef = useRef<"on_screen" | "away">("on_screen");
+
+  // ✅ State only for UI display (update less frequently)
+  const [displayConfusion, setDisplayConfusion] = useState<number>(0);
+  const [displayGaze, setDisplayGaze] = useState<"on_screen" | "away">("on_screen");
+  const [updateCounter, setUpdateCounter] = useState(0); // Force UI update every N frames
 
   // ==================== CAMERA INITIALIZATION ====================
-  // ✅ ONE-TIME camera init (CRITICAL: Not in useEffect dependency loop!)
   useEffect(() => {
     if (cameraInitStartedRef.current || !cvReady) return;
     cameraInitStartedRef.current = true;
@@ -94,6 +98,50 @@ export default function StudyPage() {
     return () => {};
   }, [cvReady]);
 
+  // ==================== SENSING EVENTS - CRITICAL FIX ====================
+  // ✅ CRITICAL: Use useCallback to memoize, prevent re-creation on every render
+  const handleSensingEvent = useCallback((e: SensingEvent) => {
+    // ✅ CRITICAL FIX: Store in refs to AVOID state updates every frame
+    lastConfusionRef.current = e.confusion;
+    lastGazeRef.current = e.gaze;
+
+    // ✅ Only emit socket event, don't update state
+    if (socket?.connected) {
+      socket.emit("presage_event", e);
+    }
+
+    // ✅ Auto-clarification on sustained confusion
+    if (e.confusion > 0.6) {
+      if (!confusedStartRef.current) confusedStartRef.current = e.ts;
+      
+      if (e.ts - (confusedStartRef.current ?? 0) > 3000) {
+        const windowMs = 5 * 60 * 1000;
+        lastTriggerTimesRef.current = lastTriggerTimesRef.current.filter(
+          (t) => e.ts - t < windowMs
+        );
+
+        if (lastTriggerTimesRef.current.length < 2 && socket?.connected) {
+          console.log("🤔 Detected confusion, requesting clarification...");
+          socket.emit("user_confused", { ts: e.ts });
+          lastTriggerTimesRef.current.push(e.ts);
+          confusedStartRef.current = null;
+        }
+      }
+    } else {
+      confusedStartRef.current = null;
+    }
+  }, [socket]);
+
+  // ✅ CRITICAL FIX: Throttle UI updates (only update display every 1 second)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDisplayConfusion(lastConfusionRef.current);
+      setDisplayGaze(lastGazeRef.current);
+    }, 1000); // Update UI every 1 second instead of every frame
+    
+    return () => clearInterval(interval);
+  }, []);
+
   // ==================== SENSING TOGGLE ====================
   useEffect(() => {
     if (!sensingEnabled || !cameraReady) {
@@ -111,10 +159,8 @@ export default function StudyPage() {
         const stop = await startCvSensing(
           videoRef.current,
           canvasRef.current,
-          (e) => {
-            if (!cancelled) handleSensingEvent(e);
-          },
-          { intervalMs: 350, targetWidth: 320 }
+          handleSensingEvent,  // ✅ Uses memoized callback
+          { intervalMs: 2000, targetWidth: 120 } // ✅ OPTIMIZED: Changed from (350, 320) to (2000, 120)
         );
 
         if (!cancelled) stopCvRef.current = stop;
@@ -129,7 +175,7 @@ export default function StudyPage() {
       stopCvRef.current?.();
       stopCvRef.current = null;
     };
-  }, [sensingEnabled, cameraReady]);
+  }, [sensingEnabled, cameraReady, handleSensingEvent]);
 
   // ==================== SOCKET CONNECTION ====================
   useEffect(() => {
@@ -185,7 +231,7 @@ export default function StudyPage() {
     });
 
     s.on("presage_event", (e) => {
-      console.log("📊 Presage event:", e);
+      // Silently handle - don't log on every event
     });
 
     setSocket(s);
@@ -275,37 +321,6 @@ export default function StudyPage() {
       } catch {}
     }
   };
-
-  // ==================== SENSING EVENTS ====================
-  function handleSensingEvent(e: SensingEvent) {
-    setLastConfusion(e.confusion);
-    setLastGaze(e.gaze);
-
-    if (socket?.connected) {
-      socket.emit("presage_event", e);
-    }
-
-    // ✅ Auto-clarification on sustained confusion
-    if (e.confusion > 0.6) {
-      if (!confusedStartRef.current) confusedStartRef.current = e.ts;
-      
-      if (e.ts - (confusedStartRef.current ?? 0) > 3000) {
-        const windowMs = 5 * 60 * 1000;
-        lastTriggerTimesRef.current = lastTriggerTimesRef.current.filter(
-          (t) => e.ts - t < windowMs
-        );
-
-        if (lastTriggerTimesRef.current.length < 2 && socket?.connected) {
-          console.log("🤔 Detected confusion, requesting clarification...");
-          socket.emit("user_confused", { ts: e.ts });
-          lastTriggerTimesRef.current.push(e.ts);
-          confusedStartRef.current = null;
-        }
-      }
-    } else {
-      confusedStartRef.current = null;
-    }
-  }
 
   // ==================== ACTIONS ====================
   const askQuestion = () => {
@@ -398,7 +413,7 @@ export default function StudyPage() {
             </div>
             {sensingEnabled && (
               <div style={{ fontSize: 11, color: "#444", marginTop: 6 }}>
-                <b>Live:</b> gaze={lastGaze} | confusion={lastConfusion.toFixed(2)}
+                <b>Live:</b> gaze={displayGaze} | confusion={displayConfusion.toFixed(2)}
               </div>
             )}
           </div>

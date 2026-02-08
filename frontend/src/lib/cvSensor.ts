@@ -7,8 +7,8 @@ export type SensingEvent = {
 
 type StartOptions = {
   cascadeUrl?: string;        // default: /models/haarcascade_frontalface_default.xml
-  intervalMs?: number;        // default: 350ms
-  targetWidth?: number;       // default: 320 (downscale for speed)
+  intervalMs?: number;        // default: 2000ms (CRITICAL: Must be high to prevent lag)
+  targetWidth?: number;       // default: 120 (CRITICAL: Must be small to prevent CPU overload)
   stopCameraOnStop?: boolean; // 
 };
 
@@ -97,7 +97,7 @@ export async function initCameraForSensing(videoEl: HTMLVideoElement): Promise<v
   return initializeCameraAsync(videoEl);
 }
 
-// ✅ MODIFIED: startCvSensing no longer calls getUserMedia
+// ✅ OPTIMIZED: startCvSensing with aggressive performance tuning
 export async function startCvSensing(
   videoEl: HTMLVideoElement,
   canvasEl: HTMLCanvasElement,
@@ -105,8 +105,10 @@ export async function startCvSensing(
   opts: StartOptions = {}
 ) {
   const cascadeUrl = opts.cascadeUrl ?? "/models/haarcascade_frontalface_default.xml";
-  const intervalMs = opts.intervalMs ?? 350; // ✅ slower default
-  const targetWidth = opts.targetWidth ?? 320; // ✅ downscale for speed
+  // ✅ CRITICAL FIX: Increased from 350ms to 2000ms to prevent lag/crashes
+  const intervalMs = opts.intervalMs ?? 2000;
+  // ✅ CRITICAL FIX: Reduced from 320px to 120px for much faster processing
+  const targetWidth = opts.targetWidth ?? 120;
   const stopCameraOnStop = opts.stopCameraOnStop ?? true;
 
   const cv = await waitForOpenCV();
@@ -118,15 +120,18 @@ export async function startCvSensing(
 
   let stopped = false;
   let timer: any = null;
-  let processing = false; // ✅ prevents overlap
+  let processing = false;
 
-  // ✅ CHANGED: Expect camera to be pre-initialized by caller
+  // ✅ Ensure camera is pre-initialized
   if (!videoEl.srcObject) {
     throw new Error("Video element must have a stream before calling startCvSensing. Call initCameraForSensing first.");
   }
 
   const processFrame = () => {
-    if (stopped || processing) return;
+    // ✅ CRITICAL: Skip if already processing - prevents queue buildup
+    if (stopped || processing) {
+      return;
+    }
     processing = true;
 
     try {
@@ -134,7 +139,7 @@ export async function startCvSensing(
       const vh = videoEl.videoHeight;
       if (!vw || !vh) return;
 
-      // ✅ Downscale for detection speed
+      // ✅ Ultra downscale for detection speed
       const scale = targetWidth / vw;
       const w = Math.max(1, Math.floor(vw * scale));
       const h = Math.max(1, Math.floor(vh * scale));
@@ -154,8 +159,8 @@ export async function startCvSensing(
       const faces = new cv.RectVector();
       const msize = new cv.Size(0, 0);
 
-      // ✅ Slightly more conservative params reduce CPU and false positives
-      classifier.detectMultiScale(gray, faces, 1.15, 4, 0, msize, msize);
+      // ✅ AGGRESSIVE: More conservative detection for speed (1.3 scaleFactor, 8 minNeighbors)
+      classifier.detectMultiScale(gray, faces, 1.3, 8, 0, msize, msize);
 
       const ts = Date.now();
 
@@ -217,7 +222,7 @@ export async function startCvSensing(
       faces.delete();
       msize.delete();
     } catch (err) {
-      console.error("CV processFrame error:", err);
+      console.error("❌ CV processFrame error:", err);
     } finally {
       processing = false;
     }
