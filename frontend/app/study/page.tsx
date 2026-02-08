@@ -5,15 +5,7 @@ import { io, Socket } from "socket.io-client";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-import { startCvSensing, SensingEvent } from "@/src/lib/cvSensor";
-=======
 import { SimulatedSensingEngine } from "@/src/lib/simulatedSensing";
->>>>>>> Stashed changes
-=======
-import { SimulatedSensingEngine } from "@/src/lib/simulatedSensing";
->>>>>>> Stashed changes
 import { recordAndTranscribe } from "@/src/lib/audioProcessing";
 
 // ============== TYPES ==============
@@ -35,21 +27,9 @@ export default function StudyPage() {
   const [studentState, setStudentState] = useState<StudentState>("idle");
   const [distraction, setDistraction] = useState(0);
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  // ✅ Camera state
-  const [cameraReady, setCameraReady] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-=======
   // === Notes ===
   const [notesReady, setNotesReady] = useState(false);
   const [notesFile, setNotesFile] = useState<string | null>(null);
->>>>>>> Stashed changes
-=======
-  // === Notes ===
-  const [notesReady, setNotesReady] = useState(false);
-  const [notesFile, setNotesFile] = useState<string | null>(null);
->>>>>>> Stashed changes
 
   // === Conversation ===
   const [currentQuestion, setCurrentQuestion] = useState("");
@@ -57,43 +37,16 @@ export default function StudyPage() {
   const [isThinking, setIsThinking] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [recentQuestions, setRecentQuestions] = useState<Question[]>([]);
-<<<<<<< Updated upstream
-
-<<<<<<< Updated upstream
-  // ✅ Distraction metrics (SIMPLIFIED - no confusion)
-  const [lastDistraction, setLastDistraction] = useState<number>(0);
-  const [lastGaze, setLastGaze] = useState<"on_screen" | "away">("on_screen");
-  const [processingTimeMs, setProcessingTimeMs] = useState(0);
-
-  // ✅ Refs
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stopCvRef = useRef<null | (() => void)>(null);
-  const socketInitialized = useRef(false);
-  const cameraInitStartedRef = useRef(false);
-
-  // ✅ Audio refs
-=======
-  // === Audio/Recording ===
-  const [isListening, setIsListening] = useState(false);
-  const [listeningCountdown, setListeningCountdown] = useState(0);
-
-=======
 
   // === Audio/Recording ===
   const [isListening, setIsListening] = useState(false);
   const [listeningCountdown, setListeningCountdown] = useState(0);
 
->>>>>>> Stashed changes
   // === Internals ===
   const socketInitRef = useRef(false);
   const sensingEngineRef = useRef<SimulatedSensingEngine | null>(null);
   const sensingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const confusionTimestampRef = useRef<number | null>(null);
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
@@ -101,118 +54,6 @@ export default function StudyPage() {
   const queueRef = useRef<ArrayBuffer[]>([]);
   const audioEndedRef = useRef(false);
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  // ==================== CAMERA INITIALIZATION ====================
-  const initializeCamera = async () => {
-    if (cameraInitStartedRef.current || !cvReady) return;
-    cameraInitStartedRef.current = true;
-
-    try {
-      console.log("📷 Requesting camera permission...");
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-
-      if (!videoRef.current) {
-        stream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-
-      videoRef.current.srcObject = stream;
-
-      await new Promise<void>((resolve) => {
-        const onLoadedMetadata = () => {
-          videoRef.current?.removeEventListener("loadedmetadata", onLoadedMetadata);
-          resolve();
-        };
-        videoRef.current?.addEventListener("loadedmetadata", onLoadedMetadata);
-        videoRef.current?.play().catch(() => {});
-      });
-
-      console.log("✅ Camera ready");
-      setCameraReady(true);
-      setCameraError(null);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("❌ Camera error:", msg);
-      setCameraError(msg);
-      setCameraReady(false);
-    }
-  };
-=======
-  // ==================== SOCKET CONNECTION ====================
-  useEffect(() => {
-    if (socketInitRef.current) return;
-    socketInitRef.current = true;
-
-    try {
-      const s = io("http://localhost:3001", {
-        transports: ["websocket"],
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-      });
-
-      s.on("connect", () => {
-        console.log("[StudyBuddy] Connected");
-      });
-
-      s.on("disconnect", () => {
-        console.log("[StudyBuddy] Disconnected");
-      });
-
-      s.on("stream_chunk", (data: string) => {
-        setAnswer((prev) => prev + data);
-      });
-
-      s.on("stream_end", () => {
-        setIsThinking(false);
-        setIsSpeaking(true);
-        // Audio is now playing, speaking indicator stays until audio_end
-      });
-
-      s.on("audio_chunk", (data: ArrayBuffer) => {
-        pushAudioChunk(data);
-      });
-
-      s.on("audio_end", () => {
-        audioEndedRef.current = true;
-        flushQueueIfPossible();
-        setIsSpeaking(false);
-      });
-
-      s.on("session_summary", () => {
-        try {
-          router.push("/dashboard");
-        } catch (err) {
-          console.error("[StudyBuddy] Navigation error:", err);
-        }
-      });
-
-      s.on("stream_error", (error: string) => {
-        console.error("[StudyBuddy] Stream error:", error);
-        setIsThinking(false);
-        setAnswer("I encountered an issue. Please try again.");
-      });
-
-      setSocket(s);
-
-      return () => {
-        socketInitRef.current = false;
-        s.off();
-        s.close();
-        cleanupAudio();
-      };
-    } catch (err) {
-      console.error("[StudyBuddy] Socket setup failed:", err);
-    }
-  }, [router]);
->>>>>>> Stashed changes
-
-  // ==================== SIMULATED SENSING ====================
-  useEffect(() => {
-=======
   // ==================== SOCKET CONNECTION ====================
   useEffect(() => {
     if (socketInitRef.current) return;
@@ -282,7 +123,6 @@ export default function StudyPage() {
 
   // ==================== SIMULATED SENSING ====================
   useEffect(() => {
->>>>>>> Stashed changes
     if (!sessionActive) {
       if (sensingIntervalRef.current) clearInterval(sensingIntervalRef.current);
       sensingEngineRef.current = null;
@@ -297,24 +137,6 @@ export default function StudyPage() {
     sensingIntervalRef.current = setInterval(() => {
       const event = sensingEngineRef.current!.getEvent();
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-        const stop = await startCvSensing(
-          videoRef.current,
-          canvasRef.current,
-          (e) => {
-            if (!cancelled) handleSensingEvent(e);
-          },
-          { intervalMs: 350, targetWidth: 320, detectionIntervalMs: 500 }
-        );
-
-        if (!cancelled) stopCvRef.current = stop;
-      } catch (err) {
-        console.error("❌ CV start failed:", err);
-        if (!cancelled) setSensingEnabled(false);
-=======
-=======
->>>>>>> Stashed changes
       // Determine state from distraction
       let state: StudentState = "confident";
       if (event.distraction < 0.3) {
@@ -323,10 +145,6 @@ export default function StudyPage() {
         state = "distracted";
       } else {
         state = "confused";
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
       }
 
       setDistraction(event.distraction);
@@ -361,24 +179,9 @@ export default function StudyPage() {
     try {
       console.log("[StudyBuddy] Confusion detected, offering help...");
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-    console.log("🔌 Connecting to backend...");
-    const s = io("http://localhost:3001", {
-      transports: ["websocket"],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-=======
       if (socket?.connected) {
         setIsThinking(true);
         initMSE();
->>>>>>> Stashed changes
-=======
-      if (socket?.connected) {
-        setIsThinking(true);
-        initMSE();
->>>>>>> Stashed changes
 
         socket.emit("confusion_prompt", {
           message: "You look confused. Would you like me to explain this more clearly?",
@@ -435,28 +238,10 @@ export default function StudyPage() {
       initMSE();
       setIsListening(false);
       setListeningCountdown(0);
-<<<<<<< Updated upstream
-
-<<<<<<< Updated upstream
-    setSocket(s);
-
-    return () => {
-      socketInitialized.current = false;
-      s.off();
-      s.close();
-      cleanupAudio();
-    };
-  }, [router]);
-=======
-      if (socket?.connected) {
-        socket.emit("ask_stream", { question: transcript });
-
-=======
 
       if (socket?.connected) {
         socket.emit("ask_stream", { question: transcript });
 
->>>>>>> Stashed changes
         // Track question
         setRecentQuestions((prev) => [
           {
@@ -473,10 +258,6 @@ export default function StudyPage() {
       setListeningCountdown(0);
     }
   };
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 
   // ==================== AUDIO STREAMING ====================
   const cleanupAudio = () => {
@@ -562,43 +343,7 @@ export default function StudyPage() {
     }
   };
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  // ==================== SENSING EVENTS ====================
-  // ✅ SIMPLIFIED: Only track distraction (head movement)
-  function handleSensingEvent(e: SensingEvent) {
-    setLastDistraction(e.distraction);
-    setLastGaze(e.gaze);
-    setProcessingTimeMs(e.processingTimeMs);
-
-    // Send to backend for logging
-    if (socket?.connected) {
-      socket.emit("presage_event", {
-        ts: e.ts,
-        face_present: e.face_present,
-        gaze: e.gaze,
-        distraction: e.distraction,
-      });
-    }
-  }
-
   // ==================== ACTIONS ====================
-  const handleStartSensing = async () => {
-    if (!cameraReady) {
-      console.log("📷 Initializing camera...");
-      await initializeCamera();
-    }
-    setSensingEnabled(true);
-  };
-
-  const askQuestion = () => {
-    if (!question.trim()) return alert("Enter a question");
-    if (!socket?.connected) return alert("Not connected");
-=======
-  // ==================== ACTIONS ====================
-=======
-  // ==================== ACTIONS ====================
->>>>>>> Stashed changes
   const handleStartSession = () => {
     if (!notesReady) {
       alert("Please upload or use sample notes first");
@@ -606,10 +351,6 @@ export default function StudyPage() {
     }
     setSessionActive(true);
   };
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 
   const handleUploadNotes = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -689,23 +430,6 @@ Photosynthesis is the process by which plants convert light energy into chemical
     if (!socket?.connected || isThinking || isListening) return;
 
     try {
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-      setIsRecording(true);
-      console.log("🎤 Recording...");
-      const text = await recordAndTranscribe(5000);
-
-      if (text.trim()) {
-        setQuestion(text);
-        setAnswer("");
-        setIsStreaming(true);
-        initMSE();
-        socket.emit("ask_stream", { question: text });
-      } else {
-        alert("No speech detected");
-=======
-=======
->>>>>>> Stashed changes
       setIsListening(true);
       setListeningCountdown(5);
 
@@ -715,10 +439,6 @@ Photosynthesis is the process by which plants convert light energy into chemical
         setIsListening(false);
         setListeningCountdown(0);
         return;
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
       }
 
       setCurrentQuestion(transcript);
@@ -760,33 +480,11 @@ Photosynthesis is the process by which plants convert light energy into chemical
   // ==================== RENDER ====================
 
   return (
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-    <div style={{ padding: 16, maxWidth: 1200 }}>
-      <Script
-        src="https://docs.opencv.org/4.x/opencv.js"
-        strategy="afterInteractive"
-        onLoad={() => {
-          console.log("✅ OpenCV.js loaded");
-          setCvReady(true);
-        }}
-        onError={() => {
-          console.error("❌ OpenCV.js failed");
-          setCvReady(false);
-        }}
-      />
-=======
-=======
->>>>>>> Stashed changes
     <div style={styles.root}>
       {/* ===== BACKGROUND ===== */}
       <div style={styles.bgGradient} />
       <div style={styles.bgGlow1} />
       <div style={styles.bgGlow2} />
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 
       {/* ===== MAIN CONTENT ===== */}
       <div style={styles.container}>
@@ -796,172 +494,6 @@ Photosynthesis is the process by which plants convert light energy into chemical
           <p style={styles.subtitle}>Your AI Study Companion</p>
         </header>
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-      {/* ✅ STATUS BAR */}
-      <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
-        <div style={{ fontSize: 14 }}>
-          <b>Connection:</b> {isConnected ? "✅ Connected" : "⚠️ Disconnected"}
-          <span style={{ marginLeft: 20 }}>
-            <b>OpenCV:</b> {cvReady ? "✅ Loaded" : "⏳ Loading"}
-          </span>
-          <span style={{ marginLeft: 20 }}>
-            <b>Camera:</b>{" "}
-            {cameraReady ? "✅ Ready" : cameraError ? "❌ Error" : "⏳ Not init"}
-          </span>
-        </div>
-        {cameraError && (
-          <div style={{ color: "red", marginTop: 8, fontSize: 12 }}>
-            Error: {cameraError}
-          </div>
-        )}
-      </div>
-
-      {/* ✅ DISTRACTION SENSING SECTION */}
-      <div
-        style={{
-          marginTop: 16,
-          padding: 12,
-          border: "1px solid #ddd",
-          borderRadius: 10,
-          backgroundColor: sensingEnabled ? "#f0f8f0" : "#f9f9f9",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>📹 Distraction Detection</div>
-            <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
-              Monitors head movement to detect distraction
-            </div>
-            {sensingEnabled && (
-              <div style={{ fontSize: 11, color: "#444", marginTop: 6, fontFamily: "monospace" }}>
-                <div>
-                  <b>Distraction:</b> {(lastDistraction * 100).toFixed(0)}% | <b>Gaze:</b> {lastGaze}
-                </div>
-                <div>
-                  <b>Processing:</b> {processingTimeMs.toFixed(1)}ms
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            onClick={() => {
-              if (!sensingEnabled) {
-                handleStartSensing();
-              } else {
-                setSensingEnabled(false);
-              }
-            }}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 8,
-              border: "none",
-              backgroundColor: sensingEnabled ? "#ff6b6b" : "#4CAF50",
-              color: "white",
-              cursor: cvReady ? "pointer" : "not-allowed",
-              opacity: cvReady ? 1 : 0.5,
-              fontWeight: "bold",
-            }}
-            disabled={!cvReady}
-          >
-            {sensingEnabled ? "🔴 Stop" : "📹 Start"}
-          </button>
-        </div>
-      </div>
-
-      {/* ✅ QUESTION INPUT */}
-      <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <input
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyPress={(e) => e.key === "Enter" && !isStreaming && askQuestion()}
-          placeholder="Ask a question or use voice button..."
-          style={{
-            flex: 1,
-            minWidth: 200,
-            padding: 12,
-            borderRadius: 8,
-            border: "1px solid #ccc",
-            fontSize: 14,
-          }}
-          disabled={!isConnected || isStreaming}
-        />
-
-        <button
-          onClick={handleVoiceInput}
-          style={{
-            padding: "12px 16px",
-            borderRadius: 8,
-            border: "none",
-            backgroundColor: isRecording ? "#ff9800" : "#2196F3",
-            color: "white",
-            cursor: isConnected && !isStreaming ? "pointer" : "not-allowed",
-            opacity: isConnected && !isStreaming ? 1 : 0.5,
-            fontWeight: "bold",
-          }}
-          disabled={!isConnected || isStreaming}
-          title="Record voice question (5 seconds)"
-        >
-          {isRecording ? "🎤 Recording..." : "🎤 Voice"}
-        </button>
-
-        <button
-          onClick={askQuestion}
-          style={{
-            padding: "12px 16px",
-            borderRadius: 8,
-            border: "none",
-            backgroundColor: "#4CAF50",
-            color: "white",
-            cursor: isConnected && !isStreaming && question.trim() ? "pointer" : "not-allowed",
-            opacity: isConnected && !isStreaming && question.trim() ? 1 : 0.5,
-            fontWeight: "bold",
-          }}
-          disabled={!isConnected || isStreaming || !question.trim()}
-        >
-          {isStreaming ? "⏳ Asking..." : "📤 Ask"}
-        </button>
-
-        <button
-          onClick={endSession}
-          style={{
-            padding: "12px 16px",
-            borderRadius: 8,
-            border: "1px solid #333",
-            backgroundColor: "transparent",
-            cursor: isConnected ? "pointer" : "not-allowed",
-            opacity: isConnected ? 1 : 0.5,
-          }}
-          disabled={!isConnected}
-        >
-          End Session
-        </button>
-      </div>
-
-      {/* ✅ ANSWER DISPLAY */}
-      <div style={{ marginTop: 20 }}>
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Answer</div>
-        <pre
-          style={{
-            whiteSpace: "pre-wrap",
-            padding: 14,
-            border: "1px solid #ddd",
-            borderRadius: 10,
-            minHeight: 200,
-            backgroundColor: "#f9f9f9",
-            fontSize: 14,
-            lineHeight: 1.6,
-            color: answer ? "#000" : "#999",
-          }}
-        >
-          {answer || (isConnected ? "📝 Ask a question to get started..." : "🔌 Connecting...")}
-        </pre>
-      </div>
-
-      {/* ✅ HIDDEN ELEMENTS */}
-      <video ref={videoRef} style={{ display: "none" }} playsInline muted />
-      <canvas ref={canvasRef} style={{ display: "none" }} />
-=======
         {!sessionActive ? (
           // ===== SETUP SCREEN ===== 
           <SetupScreen
@@ -992,39 +524,6 @@ Photosynthesis is the process by which plants convert light energy into chemical
           />
         )}
       </div>
->>>>>>> Stashed changes
-=======
-        {!sessionActive ? (
-          // ===== SETUP SCREEN ===== 
-          <SetupScreen
-            notesReady={notesReady}
-            notesFile={notesFile}
-            onUploadNotes={handleUploadNotes}
-            onUseSampleNotes={handleUseSampleNotes}
-            onStartSession={handleStartSession}
-          />
-        ) : (
-          // ===== STUDY SCREEN =====
-          <StudyScreen
-            studentState={studentState}
-            distraction={distraction}
-            notesReady={notesReady}
-            currentQuestion={currentQuestion}
-            answer={answer}
-            isThinking={isThinking}
-            isSpeaking={isSpeaking}
-            isListening={isListening}
-            listeningCountdown={listeningCountdown}
-            recentQuestions={recentQuestions}
-            onQuestionChange={setCurrentQuestion}
-            onAskQuestion={handleAskQuestion}
-            onVoiceInput={handleVoiceInput}
-            onRecentQuestion={handleRecentQuestion}
-            onEndSession={handleEndSession}
-          />
-        )}
-      </div>
->>>>>>> Stashed changes
     </div>
   );
 }
