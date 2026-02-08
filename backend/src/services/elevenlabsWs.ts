@@ -26,62 +26,80 @@ export function startElevenLabsStream(options: ElevenLabsStreamOptions) {
   // ElevenLabs WebSocket URL
   const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input?model_id=${modelId}`;
 
-  const ws = new WebSocket(wsUrl, {
-    headers: {
-      "xi-api-key": apiKey
-    }
-  });
-
+  let ws: WebSocket | null = null;
   let isOpen = false;
   let textBuffer = "";
 
-  ws.on("open", () => {
-    console.log("🔊 ElevenLabs WebSocket connected");
-    isOpen = true;
-
-    // Send initial config
-    ws.send(JSON.stringify({
-      text: " ",
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.75
+  try {
+    ws = new WebSocket(wsUrl, {
+      headers: {
+        "xi-api-key": apiKey
       }
-    }));
-  });
+    });
 
-  ws.on("message", (data: Buffer) => {
-    try {
-      const response = JSON.parse(data.toString());
-      
-      if (response.audio) {
-        // Decode base64 audio
-        const audioBuffer = Buffer.from(response.audio, "base64");
-        onAudioChunk(audioBuffer);
+    ws.on("open", () => {
+      console.log("🔊 ElevenLabs WebSocket connected");
+      isOpen = true;
+
+      // Send initial config with optimized settings
+      ws!.send(JSON.stringify({
+        text: " ",
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75
+        }
+      }));
+    });
+
+    ws.on("message", (data: Buffer | string) => {
+      try {
+        // Handle binary or text data
+        const str = typeof data === "string" ? data : data.toString();
+        
+        try {
+          const response = JSON.parse(str);
+          
+          if (response.audio) {
+            // Decode base64 audio to Buffer
+            const audioBuffer = Buffer.from(response.audio, "base64");
+            console.log(`📦 Received audio chunk: ${audioBuffer.length} bytes`);
+            onAudioChunk(audioBuffer);
+          }
+
+          if (response.isFinal) {
+            console.log("✅ ElevenLabs stream marked as final");
+            onFinal();
+          }
+        } catch (parseErr) {
+          // Raw binary audio data
+          console.log(`📦 Received binary audio: ${data.length} bytes`);
+          onAudioChunk(Buffer.isBuffer(data) ? data : Buffer.from(data));
+        }
+      } catch (err) {
+        console.error("❌ Message parsing error:", err);
       }
+    });
 
-      if (response.isFinal) {
-        console.log("🎵 ElevenLabs stream completed");
-        onFinal();
-      }
-    } catch (e) {
-      // Raw audio data
-      onAudioChunk(data);
-    }
-  });
+    ws.on("error", (error) => {
+      console.error("❌ ElevenLabs WebSocket error:", error);
+      onError(`WebSocket error: ${error.message}`);
+    });
 
-  ws.on("error", (error) => {
-    console.error("❌ ElevenLabs WebSocket error:", error);
-    onError("ElevenLabs connection failed");
-  });
+    ws.on("close", () => {
+      console.log("🔌 ElevenLabs WebSocket closed");
+      isOpen = false;
+    });
 
-  ws.on("close", () => {
-    console.log("🔌 ElevenLabs WebSocket closed");
-  });
+  } catch (err: any) {
+    onError(`Failed to connect to ElevenLabs: ${err.message}`);
+    return null;
+  }
 
+  // Return interface for sending text and managing stream
   return {
     sendTextChunk: (text: string) => {
-      if (!isOpen) {
-        console.warn("⚠️ WebSocket not open, buffering text");
+      if (!ws || !isOpen) {
+        console.warn("⚠️  WebSocket not ready, buffering text");
         textBuffer += text;
         return;
       }
@@ -92,29 +110,44 @@ export function startElevenLabsStream(options: ElevenLabsStreamOptions) {
         textBuffer = "";
       }
 
-      // Send text chunk to ElevenLabs
-      ws.send(JSON.stringify({
-        text: text,
-        try_trigger_generation: true
-      }));
+      try {
+        ws.send(JSON.stringify({
+          text: text,
+          try_trigger_generation: true
+        }));
+        console.log(`📤 Sent to ElevenLabs: "${text.slice(0, 40)}..."`);
+      } catch (err) {
+        console.error("❌ Failed to send text chunk:", err);
+      }
     },
 
     end: () => {
-      if (isOpen) {
-        // Send empty string to flush remaining audio
-        ws.send(JSON.stringify({
-          text: ""
-        }));
-        
-        setTimeout(() => {
-          ws.close();
-        }, 1000);
+      if (ws && isOpen) {
+        try {
+          // Send final empty text to flush
+          ws.send(JSON.stringify({ text: "" }));
+          
+          // Close connection after short delay
+          setTimeout(() => {
+            try {
+              ws!.close();
+            } catch (err) {
+              console.error("Error closing WebSocket:", err);
+            }
+          }, 500);
+        } catch (err) {
+          console.error("Error sending end signal:", err);
+        }
       }
     },
 
     close: () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.close();
+      if (ws) {
+        try {
+          ws.close();
+        } catch (err) {
+          console.error("Error force-closing WebSocket:", err);
+        }
       }
     }
   };
