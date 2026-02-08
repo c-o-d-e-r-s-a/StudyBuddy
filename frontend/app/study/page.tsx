@@ -7,6 +7,7 @@ import Script from "next/script";
 
 // ✅ OpenCV sensing module
 import { startCvSensing, SensingEvent } from "@/src/lib/cvSensor";
+import { recordAndTranscribe } from "@/src/lib/audioProcessing";
 
 export default function StudyPage() {
   const [answer, setAnswer] = useState("");
@@ -16,29 +17,27 @@ export default function StudyPage() {
   const [isConnected, setIsConnected] = useState(false);
   const router = useRouter();
 
-  // ✅ Track OpenCV.js load status
+  // ✅ OpenCV state
   const [cvReady, setCvReady] = useState(false);
-
-  // Step 5: sensing toggle
   const [sensingEnabled, setSensingEnabled] = useState(false);
 
-  // Step 5: debounce refs
-  const confusedStartRef = useRef<number | null>(null);
-  const lastTriggerTimesRef = useRef<number[]>([]);
+  // ✅ Camera initialization state
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  // Step 5: debug display
-  const [lastConfusion, setLastConfusion] = useState<number>(0);
-  const [lastGaze, setLastGaze] = useState<"on_screen" | "away">("on_screen");
+  // ✅ Audio recording state
+  const [isRecording, setIsRecording] = useState(false);
 
-  // ✅ OpenCV hidden elements + stop function
+  // ✅ Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stopCvRef = useRef<null | (() => void)>(null);
-
-  // ✅ Prevent multiple socket connections
   const socketInitialized = useRef(false);
+  const confusedStartRef = useRef<number | null>(null);
+  const lastTriggerTimesRef = useRef<number[]>([]);
+  const cameraInitStartedRef = useRef(false);
 
-  // ---------------- Step 4: MSE audio (realtime) ----------------
+  // ✅ Audio streaming refs
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
@@ -46,61 +45,175 @@ export default function StudyPage() {
   const queueRef = useRef<ArrayBuffer[]>([]);
   const audioEndedRef = useRef(false);
 
+  // ✅ Sensing event state
+  const [lastConfusion, setLastConfusion] = useState<number>(0);
+  const [lastGaze, setLastGaze] = useState<"on_screen" | "away">("on_screen");
+
+  // ==================== CAMERA INITIALIZATION ====================
+  // ✅ ONE-TIME camera init (CRITICAL: Not in useEffect dependency loop!)
+  useEffect(() => {
+    if (cameraInitStartedRef.current || !cvReady) return;
+    cameraInitStartedRef.current = true;
+
+    (async () => {
+      try {
+        console.log("📷 Requesting camera permission...");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+
+        if (!videoRef.current) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        videoRef.current.srcObject = stream;
+        
+        // Wait for metadata
+        await new Promise<void>((resolve) => {
+          const onLoadedMetadata = () => {
+            videoRef.current?.removeEventListener("loadedmetadata", onLoadedMetadata);
+            resolve();
+          };
+          videoRef.current?.addEventListener("loadedmetadata", onLoadedMetadata);
+          videoRef.current?.play().catch(() => {});
+        });
+
+        console.log("✅ Camera ready");
+        setCameraReady(true);
+        setCameraError(null);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("❌ Camera error:", msg);
+        setCameraError(msg);
+        setCameraReady(false);
+      }
+    })();
+
+    return () => {};
+  }, [cvReady]);
+
+  // ==================== SENSING TOGGLE ====================
+  useEffect(() => {
+    if (!sensingEnabled || !cameraReady) {
+      stopCvRef.current?.();
+      stopCvRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        if (!videoRef.current || !canvasRef.current) return;
+
+        const stop = await startCvSensing(
+          videoRef.current,
+          canvasRef.current,
+          (e) => {
+            if (!cancelled) handleSensingEvent(e);
+          },
+          { intervalMs: 350, targetWidth: 320 }
+        );
+
+        if (!cancelled) stopCvRef.current = stop;
+      } catch (err) {
+        console.error("❌ CV start failed:", err);
+        if (!cancelled) setSensingEnabled(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopCvRef.current?.();
+      stopCvRef.current = null;
+    };
+  }, [sensingEnabled, cameraReady]);
+
+  // ==================== SOCKET CONNECTION ====================
+  useEffect(() => {
+    if (socketInitialized.current) return;
+    socketInitialized.current = true;
+
+    console.log("🔌 Connecting to backend...");
+    const s = io("http://localhost:3001", {
+      transports: ["websocket"],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    });
+
+    s.on("connect", () => {
+      console.log("✅ Socket connected");
+      setIsConnected(true);
+    });
+
+    s.on("disconnect", () => {
+      console.log("⚠️ Socket disconnected");
+      setIsConnected(false);
+      setIsStreaming(false);
+      cleanupAudio();
+    });
+
+    s.on("stream_chunk", (data: string) => {
+      setAnswer((prev) => prev + data);
+    });
+
+    s.on("stream_end", () => {
+      setIsStreaming(false);
+    });
+
+    s.on("audio_chunk", (data: ArrayBuffer) => {
+      pushAudioChunk(data);
+    });
+
+    s.on("audio_end", () => {
+      audioEndedRef.current = true;
+      flushQueueIfPossible();
+    });
+
+    s.on("session_summary", (summary) => {
+      localStorage.setItem("studybuddy_session_summary", JSON.stringify(summary));
+      router.push("/dashboard");
+    });
+
+    s.on("stream_error", (error: string) => {
+      console.error("❌ Error:", error);
+      setAnswer("Error: " + error);
+      setIsStreaming(false);
+      cleanupAudio();
+    });
+
+    s.on("presage_event", (e) => {
+      console.log("📊 Presage event:", e);
+    });
+
+    setSocket(s);
+
+    return () => {
+      socketInitialized.current = false;
+      s.off();
+      s.close();
+      cleanupAudio();
+    };
+  }, [router]);
+
+  // ==================== AUDIO STREAMING ====================
   const cleanupAudio = () => {
     try {
-      const audio = audioElRef.current;
-      if (audio) {
-        audio.pause();
-        audio.src = "";
-      }
+      audioElRef.current?.pause();
+      if (audioElRef.current) audioElRef.current.src = "";
     } catch {}
-    audioElRef.current = null;
-
-    try {
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    } catch {}
-    objectUrlRef.current = null;
-
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     mediaSourceRef.current = null;
     sourceBufferRef.current = null;
+    objectUrlRef.current = null;
     queueRef.current = [];
     audioEndedRef.current = false;
   };
 
-  const endMSE = () => {
-    const ms = mediaSourceRef.current;
-    const sb = sourceBufferRef.current;
-    if (!ms) return;
-
-    const finalize = () => {
-      try {
-        if (ms.readyState === "open") ms.endOfStream();
-      } catch {}
-    };
-
-    if (sb && sb.updating) sb.addEventListener("updateend", finalize, { once: true });
-    else finalize();
-  };
-
-  const flushQueueIfPossible = () => {
-    const sb = sourceBufferRef.current;
-    if (!sb || sb.updating) return;
-
-    const q = queueRef.current;
-    if (q.length > 0) {
-      const next = q.shift();
-      if (next) sb.appendBuffer(next);
-      return;
-    }
-
-    if (audioEndedRef.current) {
-      endMSE();
-    }
-  };
-
   const initMSE = () => {
     cleanupAudio();
-    audioEndedRef.current = false;
 
     const audio = new Audio();
     audioElRef.current = audio;
@@ -119,67 +232,74 @@ export default function StudyPage() {
         sb.addEventListener("updateend", flushQueueIfPossible);
         flushQueueIfPossible();
       } catch (e) {
-        console.error("❌ addSourceBuffer failed (is audio MP3?):", e);
+        console.error("❌ SourceBuffer error:", e);
       }
     });
 
-    audio.play().catch((err) => {
-      console.warn("⚠️ audio.play blocked or failed:", err);
-    });
+    audio.play().catch(() => {});
   };
 
-  const pushAudioChunk = (buf: ArrayBuffer) => {
+  const pushAudioChunk = (chunk: ArrayBuffer) => {
     const sb = sourceBufferRef.current;
-    const ms = mediaSourceRef.current;
-
-    if (!sb || !ms) {
-      queueRef.current.push(buf);
+    if (!sb) {
+      queueRef.current.push(chunk);
       return;
     }
-
-    if (sb.updating || queueRef.current.length > 0) {
-      queueRef.current.push(buf);
-      return;
-    }
-
-    try {
-      sb.appendBuffer(buf);
-    } catch {
-      queueRef.current.push(buf);
+    if (sb.updating) {
+      queueRef.current.push(chunk);
+    } else {
+      try {
+        sb.appendBuffer(chunk);
+      } catch (e) {
+        console.error("❌ appendBuffer error:", e);
+        queueRef.current.push(chunk);
+      }
     }
   };
 
-  // ---------------- Step 5: debounce helpers ----------------
-  function canTriggerNow(ts: number) {
-    const windowMs = 5 * 60 * 1000;
-    lastTriggerTimesRef.current = lastTriggerTimesRef.current.filter((t) => ts - t < windowMs);
-    return lastTriggerTimesRef.current.length < 2;
-  }
+  const flushQueueIfPossible = () => {
+    const sb = sourceBufferRef.current;
+    if (!sb || sb.updating) return;
 
-  function handlePresageEvent(e: SensingEvent) {
+    if (queueRef.current.length > 0) {
+      const next = queueRef.current.shift();
+      if (next) sb.appendBuffer(next);
+      return;
+    }
+
+    if (audioEndedRef.current) {
+      try {
+        if (mediaSourceRef.current?.readyState === "open") {
+          mediaSourceRef.current.endOfStream();
+        }
+      } catch {}
+    }
+  };
+
+  // ==================== SENSING EVENTS ====================
+  function handleSensingEvent(e: SensingEvent) {
     setLastConfusion(e.confusion);
     setLastGaze(e.gaze);
 
-    if (socket && socket.connected) {
+    if (socket?.connected) {
       socket.emit("presage_event", e);
     }
 
-    const threshold = 0.6;
-    const sustainMs = 3000;
+    // ✅ Auto-clarification on sustained confusion
+    if (e.confusion > 0.6) {
+      if (!confusedStartRef.current) confusedStartRef.current = e.ts;
+      
+      if (e.ts - (confusedStartRef.current ?? 0) > 3000) {
+        const windowMs = 5 * 60 * 1000;
+        lastTriggerTimesRef.current = lastTriggerTimesRef.current.filter(
+          (t) => e.ts - t < windowMs
+        );
 
-    if (!e.face_present) {
-      confusedStartRef.current = null;
-      return;
-    }
-
-    if (e.confusion > threshold) {
-      if (confusedStartRef.current === null) confusedStartRef.current = e.ts;
-
-      if (e.ts - (confusedStartRef.current ?? e.ts) >= sustainMs) {
-        if (canTriggerNow(e.ts) && socket && socket.connected) {
+        if (lastTriggerTimesRef.current.length < 2 && socket?.connected) {
+          console.log("🤔 Detected confusion, requesting clarification...");
+          socket.emit("user_confused", { ts: e.ts });
           lastTriggerTimesRef.current.push(e.ts);
           confusedStartRef.current = null;
-          socket.emit("user_confused", { ts: e.ts });
         }
       }
     } else {
@@ -187,173 +307,50 @@ export default function StudyPage() {
     }
   }
 
-  // ---------------- Socket setup (FIXED - prevent infinite loop) ----------------
-  useEffect(() => {
-    // ✅ CRITICAL FIX: Prevent multiple socket connections
-    if (socketInitialized.current) {
-      console.log("Socket already initialized, skipping");
-      return;
-    }
-
-    socketInitialized.current = true;
-    console.log("🔌 Initializing socket connection...");
-
-    const s = io("http://localhost:3001", {
-      transports: ["websocket"],
-      reconnectionAttempts: 3,
-      reconnectionDelay: 1000,
-      timeout: 10000
-    });
-
-    s.on("connect", () => {
-      console.log("✅ Connected to backend");
-      setIsConnected(true);
-    });
-
-    s.on("disconnect", () => {
-      console.log("⚠️ Disconnected from backend");
-      setIsConnected(false);
-      setIsStreaming(false);
-      cleanupAudio();
-    });
-
-    s.on("connect_error", (error) => {
-      console.error("❌ Connection error:", error.message);
-    });
-
-    s.on("stream_chunk", (data: string) => {
-      console.log("📦 Received chunk");
-      setAnswer((prev) => prev + data);
-    });
-
-    s.on("stream_end", () => {
-      console.log("🏁 Stream ended");
-      setIsStreaming(false);
-    });
-
-    s.on("audio_chunk", (data: ArrayBuffer) => {
-      pushAudioChunk(data);
-    });
-
-    s.on("audio_end", () => {
-      audioEndedRef.current = true;
-      flushQueueIfPossible();
-    });
-
-    s.on("session_summary", (summary) => {
-      console.log("📊 Session summary received:", summary);
-
-      try {
-        localStorage.setItem("studybuddy_session_summary", JSON.stringify(summary));
-      } catch (e) {
-        console.warn("Could not write session summary to localStorage:", e);
-      }
-
-      router.push("/dashboard");
-    });
-
-    s.on("stream_error", (error: string) => {
-      console.error("❌ Stream error:", error);
-      setAnswer("Error: " + error);
-      setIsStreaming(false);
-      cleanupAudio();
-    });
-
-    setSocket(s);
-
-    return () => {
-      console.log("🧹 Cleaning up socket");
-      socketInitialized.current = false;
-      s.off();
-      s.close();
-      cleanupAudio();
-    };
-  }, [router]); // ✅ Only router in deps
-
-  // ---------------- OpenCV sensing start/stop (FIXED - prevent restart loop) ----------------
-  useEffect(() => {
-  if (!sensingEnabled) {
-    stopCvRef.current?.();
-    stopCvRef.current = null;
-    return;
-  }
-
-  if (!cvReady) return;
-
-  let cancelled = false;
-  let timeoutId: any;
-
-  timeoutId = setTimeout(() => {
-    if (cancelled) return;
-    if (!videoRef.current || !canvasRef.current) return;
-
-    startCvSensing(
-      videoRef.current,
-      canvasRef.current,
-      (e) => {
-        if (cancelled) return;
-        handlePresageEvent(e);
-      },
-      { intervalMs: 350, targetWidth: 320 }
-    )
-      .then((stop) => {
-        stopCvRef.current = stop;
-      })
-      .catch((err) => {
-        console.error("❌ CV start failed:", err);
-      });
-  }, 500);
-
-  return () => {
-    cancelled = true;
-    clearTimeout(timeoutId);
-    stopCvRef.current?.();
-    stopCvRef.current = null;
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [sensingEnabled, cvReady]);
-
-  // ---------------- Actions ----------------
+  // ==================== ACTIONS ====================
   const askQuestion = () => {
-    if (!question.trim()) {
-      alert("Please enter a question");
-      return;
-    }
+    if (!question.trim()) return alert("Enter a question");
+    if (!socket?.connected) return alert("Not connected");
 
-    if (!socket || !socket.connected) {
-      alert("Not connected to server");
-      return;
-    }
-
-    console.log("📤 Sending question:", question);
+    console.log("📤 Asking:", question);
     setAnswer("");
     setIsStreaming(true);
-
-    // Start MSE before audio arrives
     initMSE();
-
     socket.emit("ask_stream", { question });
+  };
 
-    // Add timeout
-    const timeout = setTimeout(() => {
-      if (isStreaming) {
-        console.error("⏱️ Request timeout");
-        setAnswer("Request timed out. Please try again.");
-        setIsStreaming(false);
+  const handleVoiceInput = async () => {
+    if (!socket?.connected) return alert("Not connected");
+    if (isRecording) return;
+
+    try {
+      setIsRecording(true);
+      console.log("🎤 Recording...");
+      const text = await recordAndTranscribe(5000);
+      
+      if (text.trim()) {
+        setQuestion(text);
+        setAnswer("");
+        setIsStreaming(true);
+        initMSE();
+        socket.emit("ask_stream", { question: text });
       }
-    }, 30000);
-
-    socket.once("stream_end", () => clearTimeout(timeout));
+    } catch (err) {
+      console.error("❌ Recording error:", err);
+      alert("Voice input failed: " + String(err));
+    } finally {
+      setIsRecording(false);
+    }
   };
 
   const endSession = () => {
-    if (!socket || !socket.connected) return;
-    socket.emit("end_session");
+    if (socket?.connected) {
+      socket.emit("end_session");
+    }
   };
 
   return (
-    <div style={{ padding: 16, maxWidth: 900 }}>
-      {/* ✅ OpenCV.js CDN loader */}
+    <div style={{ padding: 16, maxWidth: 1000 }}>
       <Script
         src="https://docs.opencv.org/4.x/opencv.js"
         strategy="afterInteractive"
@@ -362,115 +359,158 @@ export default function StudyPage() {
           setCvReady(true);
         }}
         onError={() => {
-          console.error("❌ Failed to load OpenCV.js");
+          console.error("❌ OpenCV.js failed");
           setCvReady(false);
         }}
       />
 
-      <h1 style={{ fontSize: 28, fontWeight: 800 }}>StudyBuddy</h1>
+      <h1 style={{ fontSize: 32, fontWeight: 800 }}>StudyBuddy</h1>
 
-      <div style={{ marginTop: 12 }}>
-        <b>Status:</b> {isConnected ? "✅ Connected" : "⚠️ Disconnected"}
+      {/* ✅ STATUS BAR */}
+      <div style={{ marginTop: 16, padding: 12, border: "1px solid #ddd", borderRadius: 10 }}>
+        <div style={{ fontSize: 14 }}>
+          <b>Connection:</b> {isConnected ? "✅ Connected" : "⚠️ Disconnected"}
+          <span style={{ marginLeft: 20 }}>
+            <b>OpenCV:</b> {cvReady ? "✅ Loaded" : "⏳ Loading"}
+          </span>
+          <span style={{ marginLeft: 20 }}>
+            <b>Camera:</b> {cameraReady ? "✅ Ready" : cameraError ? "❌ Error" : "⏳ Init"}
+          </span>
+        </div>
+        {cameraError && <div style={{ color: "red", marginTop: 8, fontSize: 12 }}>Error: {cameraError}</div>}
       </div>
 
+      {/* ✅ SENSING SECTION */}
       <div
         style={{
           marginTop: 16,
           padding: 12,
           border: "1px solid #ddd",
           borderRadius: 10,
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "center"
+          backgroundColor: sensingEnabled ? "#f0f8f0" : "#f9f9f9"
         }}
       >
-        <div>
-          <div style={{ fontWeight: 700 }}>Attention & confusion sensing (OpenCV)</div>
-          <div style={{ fontSize: 12, color: "#555" }}>
-            Opt-in only. Uses your webcam locally to generate small numeric signals.
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>🎥 Attention Sensing</div>
+            <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+              Camera monitors attention & auto-clarifies if confusion detected
+            </div>
+            {sensingEnabled && (
+              <div style={{ fontSize: 11, color: "#444", marginTop: 6 }}>
+                <b>Live:</b> gaze={lastGaze} | confusion={lastConfusion.toFixed(2)}
+              </div>
+            )}
           </div>
-          <div style={{ fontSize: 12, color: "#777", marginTop: 4 }}>
-            OpenCV loaded: {cvReady ? "✅ Yes" : "⏳ Loading..."}
-          </div>
+          <button
+            onClick={() => setSensingEnabled(!sensingEnabled)}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 8,
+              border: "none",
+              backgroundColor: sensingEnabled ? "#ff6b6b" : "#4CAF50",
+              color: "white",
+              cursor: cameraReady ? "pointer" : "not-allowed",
+              opacity: cameraReady ? 1 : 0.5,
+              fontWeight: "bold"
+            }}
+            disabled={!cameraReady}
+          >
+            {sensingEnabled ? "🔴 Stop" : "🎥 Start"}
+          </button>
         </div>
-
-        <button
-          onClick={() => setSensingEnabled((v) => !v)}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #333",
-            cursor: isConnected && cvReady ? "pointer" : "not-allowed",
-            opacity: isConnected && cvReady ? 1 : 0.5
-          }}
-          disabled={!isConnected || !cvReady}
-          title={!cvReady ? "OpenCV is still loading..." : ""}
-        >
-          {sensingEnabled ? "Disable" : "Enable"}
-        </button>
       </div>
 
-      {sensingEnabled && (
-        <div style={{ marginTop: 10, fontSize: 12, color: "#444" }}>
-          <b>Live signals:</b> gaze={lastGaze}, confusion={lastConfusion.toFixed(2)} (threshold 0.60)
-        </div>
-      )}
-
-      <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
+      {/* ✅ QUESTION INPUT */}
+      <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
         <input
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && !isStreaming && askQuestion()}
-          placeholder="Ask a question..."
-          style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+          onKeyPress={(e) => e.key === "Enter" && !isStreaming && askQuestion()}
+          placeholder="Ask a question or use voice button..."
+          style={{
+            flex: 1,
+            minWidth: 200,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #ccc",
+            fontSize: 14
+          }}
           disabled={!isConnected || isStreaming}
         />
 
         <button
-          onClick={endSession}
-          style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #333" }}
+          onClick={handleVoiceInput}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            border: "none",
+            backgroundColor: isRecording ? "#ff9800" : "#2196F3",
+            color: "white",
+            cursor: isConnected ? "pointer" : "not-allowed",
+            opacity: isConnected ? 1 : 0.5,
+            fontWeight: "bold"
+          }}
           disabled={!isConnected}
+          title="Record voice question"
         >
-          End Session
+          {isRecording ? "🎤 Recording..." : "🎤 Voice"}
         </button>
 
         <button
           onClick={askQuestion}
           style={{
-            padding: "10px 14px",
-            borderRadius: 10,
-            border: "1px solid #333",
+            padding: "12px 16px",
+            borderRadius: 8,
+            border: "none",
+            backgroundColor: "#4CAF50",
+            color: "white",
             cursor: isConnected && !isStreaming && question.trim() ? "pointer" : "not-allowed",
-            opacity: isConnected && !isStreaming && question.trim() ? 1 : 0.5
+            opacity: isConnected && !isStreaming && question.trim() ? 1 : 0.5,
+            fontWeight: "bold"
           }}
           disabled={!isConnected || isStreaming || !question.trim()}
         >
-          {isStreaming ? "Asking..." : "Ask"}
+          {isStreaming ? "⏳ Asking..." : "📤 Ask"}
+        </button>
+
+        <button
+          onClick={endSession}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            border: "1px solid #333",
+            backgroundColor: "transparent",
+            cursor: isConnected ? "pointer" : "not-allowed",
+            opacity: isConnected ? 1 : 0.5
+          }}
+          disabled={!isConnected}
+        >
+          End Session
         </button>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Answer</div>
+      {/* ✅ ANSWER DISPLAY */}
+      <div style={{ marginTop: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>Answer</div>
         <pre
           style={{
             whiteSpace: "pre-wrap",
-            padding: 12,
+            padding: 14,
             border: "1px solid #ddd",
             borderRadius: 10,
-            minHeight: 140,
-            backgroundColor: "#f9f9f9"
+            minHeight: 200,
+            backgroundColor: "#f9f9f9",
+            fontSize: 14,
+            lineHeight: 1.6,
+            color: answer ? "#000" : "#999"
           }}
         >
-          {answer || (isConnected ? "Upload notes via curl, then ask a question..." : "Connecting to server...")}
+          {answer || (isConnected ? "Upload notes via curl, then ask..." : "Connecting...")}
         </pre>
       </div>
 
-      <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-        Confusion trigger rule: confusion &gt; 0.60 for 3 seconds, max 2 triggers per 5 minutes.
-      </div>
-
-      {/* ✅ Hidden elements required for CV sensing */}
+      {/* ✅ HIDDEN ELEMENTS */}
       <video ref={videoRef} style={{ display: "none" }} playsInline muted />
       <canvas ref={canvasRef} style={{ display: "none" }} />
     </div>

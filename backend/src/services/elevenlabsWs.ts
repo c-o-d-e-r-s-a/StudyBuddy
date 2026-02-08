@@ -13,7 +13,7 @@ export function startElevenLabsStream(options: ElevenLabsStreamOptions) {
     onAudioChunk,
     onFinal,
     onError,
-    voiceId = "9IzcwKmvwJcw58h3KnlH", // Default voice (Rachel)
+    voiceId = "9IzcwKmvwJcw58h3KnlH", 
     modelId = "eleven_turbo_v2_5"
   } = options;
 

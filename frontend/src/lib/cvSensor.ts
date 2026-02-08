@@ -65,6 +65,39 @@ async function loadCascade(cv: any, cascadeUrl: string) {
   return classifier;
 }
 
+// ✅ NEW: Pre-initialize camera async (non-blocking)
+async function initializeCameraAsync(
+  videoEl: HTMLVideoElement,
+  options: { width?: number; height?: number } = {}
+): Promise<void> {
+  if (videoEl.srcObject) return; // Already initialized
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      width: { ideal: options.width ?? 640 },
+      height: { ideal: options.height ?? 480 }
+    },
+    audio: false
+  });
+
+  videoEl.srcObject = stream;
+
+  // Wait for video metadata to be loaded
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Video metadata timeout")), 5000);
+    videoEl.onloadedmetadata = () => {
+      clearTimeout(timeout);
+      videoEl.play().then(resolve).catch(reject);
+    };
+  });
+}
+
+// ✅ Export helper for React component
+export async function initCameraForSensing(videoEl: HTMLVideoElement): Promise<void> {
+  return initializeCameraAsync(videoEl);
+}
+
+// ✅ MODIFIED: startCvSensing no longer calls getUserMedia
 export async function startCvSensing(
   videoEl: HTMLVideoElement,
   canvasEl: HTMLCanvasElement,
@@ -87,14 +120,9 @@ export async function startCvSensing(
   let timer: any = null;
   let processing = false; // ✅ prevents overlap
 
-  // Ensure webcam is running
+  // ✅ CHANGED: Expect camera to be pre-initialized by caller
   if (!videoEl.srcObject) {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 640 }, height: { ideal: 480 } },
-      audio: false
-    });
-    videoEl.srcObject = stream;
-    await videoEl.play();
+    throw new Error("Video element must have a stream before calling startCvSensing. Call initCameraForSensing first.");
   }
 
   const processFrame = () => {

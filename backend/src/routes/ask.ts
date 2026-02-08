@@ -3,6 +3,8 @@ import { embedTexts } from "../services/embeddings";
 import { getVectorStore } from "../services/vectorStore"; // ✅ CHANGED LINE 3
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+
+
 export const askRouter = Router();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
