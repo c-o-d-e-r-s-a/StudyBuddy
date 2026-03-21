@@ -96,4 +96,3 @@ Next.js • React • TypeScript • Node.js • Socket.IO • OpenCV.js • Goo
 ---
 
 **Try StudyBuddy**: [Live Demo](#) | [GitHub](#) | [DevPost](#)  
-**Team**: [Your names] | **Hackathon**: [Event name] | **Track**: [Category]
