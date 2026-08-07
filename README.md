@@ -1,4 +1,4 @@
-##📚 StudyBuddy
+## 📚 StudyBuddy
 
 **An AI study companion that detects when you're confused or losing focus—and helps before you even ask.**
 
