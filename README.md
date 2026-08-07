@@ -95,4 +95,4 @@ Next.js • React • TypeScript • Node.js • Socket.IO • OpenCV.js • Goo
 
 ---
 
-**Try StudyBuddy**: [Live Demo](#https://attentive-tutor.lovable.app/) | [DevPost](#https://devpost.com/software/studybuddy-21w574)  
+**Try StudyBuddy**: ![Live Demo](https://attentive-tutor.lovable.app/) | ![DevPost](https://devpost.com/software/studybuddy-21w574)  
