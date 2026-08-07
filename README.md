@@ -1,12 +1,12 @@
-# StudyBuddy
+#📚 StudyBuddy
 
 **An AI study companion that detects when you're confused or losing focus—and helps before you even ask.**
 
-## Inspiration
+## 💡 Inspiration
 
 We've all been there: staring at notes for 20 minutes, mind wandering, or stuck on a concept but unsure what question to even ask. In self-paced learning, there's no instructor watching for that glazed-over look or raised hand. **StudyBuddy bridges this gap** by using computer vision to detect attention drops and confusion in real-time, then delivering context-aware help powered by Google Gemini—right when you need it most.
 
-## What it does
+## ⚙️ What it does
 
 StudyBuddy monitors your study sessions through your webcam, tracking:
 - **Focus time** and look-away events
@@ -22,7 +22,7 @@ When it detects you're struggling, it proactively offers help. You can:
 
 **Example**: You're studying calculus. After 45 seconds of confused expressions while looking at a derivative problem, StudyBuddy asks: *"This section on chain rule seems tricky—want me to break it down with an example from your notes?"*
 
-## How we built it
+## 🛠️ How we built it
 
 **Frontend**: Next.js + React + TypeScript  
 **Backend**: Node.js with Socket.IO for real-time communication  
@@ -30,7 +30,7 @@ When it detects you're struggling, it proactively offers help. You can:
 **AI**: Google Gemini API with retrieval-augmented generation (RAG)  
 **Voice**: ElevenLabs API for hands-free interaction  
 
-### Key Technical Components:
+### 🔑 Key Technical Components:
 
 1. **Attention Tracking**: OpenCV.js analyzes webcam feed to detect head pose and gaze direction. We track look-aways lasting >3 seconds and compute focus percentage per session.
 
@@ -42,7 +42,7 @@ When it detects you're struggling, it proactively offers help. You can:
 
 5. **Privacy-First**: All video processing happens client-side. No frames are uploaded—only anonymized events (timestamps, confusion scores) are logged.
 
-## Challenges we ran into
+## 🚧 Challenges we ran into
 
 - **False Positive Hell**: Early versions detected "confusion" every 30 seconds, making the system unusable. We solved this with stricter thresholding (sustained 4s signals) and exponential backoff on repeated triggers.
 
@@ -52,15 +52,15 @@ When it detects you're struggling, it proactively offers help. You can:
 
 - **Large Document Handling**: Uploading 50-page PDFs caused UI freezes. We moved parsing to a Web Worker and implemented streaming uploads with progress indicators.
 
-## Accomplishments that we're proud of
+## 🏆 Accomplishments that we're proud of
 
-✅ **It actually works**: Computer vision, real-time sockets, and AI reasoning integrate seamlessly in production  
-✅ **Privacy-respecting**: All face analysis happens locally; no video data leaves the device  
-✅ **Context-aware**: AI responses directly reference user's uploaded materials, not generic explanations  
-✅ **User-tested**: 8 beta testers reported 73% fewer "stuck moments" vs. traditional study methods  
-✅ **Responsive UX**: <2s latency from confusion detection to AI response; feels natural, not intrusive  
+ **It actually works**: Computer vision, real-time sockets, and AI reasoning integrate seamlessly in production  
+ **Privacy-respecting**: All face analysis happens locally; no video data leaves the device  
+ **Context-aware**: AI responses directly reference user's uploaded materials, not generic explanations  
+ **User-tested**: 8 beta testers reported 73% fewer "stuck moments" vs. traditional study methods  
+ **Responsive UX**: <2s latency from confusion detection to AI response; feels natural, not intrusive  
 
-## What we learned
+## 📖 What we learned
 
 - **Human-sensing AI requires restraint**: More signals ≠ better UX. Rate-limiting and confidence thresholds are critical to avoid "alert fatigue."
 
@@ -70,26 +70,26 @@ When it detects you're struggling, it proactively offers help. You can:
 
 - **Local-first is feasible**: Privacy concerns nearly killed the project early on. Proving we could do CV client-side made stakeholders comfortable and improved performance.
 
-## What's next for StudyBuddy
+## 🚀 What's next for StudyBuddy
 
-### Near-term (Next 3 months):
+### 📅 Near-term (Next 3 months):
 - **Confusion heatmaps**: Visual overlays showing which note sections triggered the most confusion
 - **Spaced repetition integration**: Auto-generate flashcards from high-confusion topics
 - **Session replays**: Rewatch study sessions with confusion markers and AI intervention timestamps
 
-### Long-term vision:
+### 🔭 Long-term vision:
 - **Collaborative study rooms**: Multi-user sessions where StudyBuddy monitors group engagement
 - **LMS integration**: Direct syncing with Canvas, Moodle, Google Classroom
 - **Personalized learning paths**: Use confusion data to recommend topic review order
 - **Offline mode**: Cache models for airplane/library use
 - **Multimodal expansion**: Detect frustration from tone of voice during verbal questions
 
-### Research goals:
+### 🔬 Research goals:
 - Partner with education researchers to validate learning outcome improvements
 - Open-source the confusion detection model for academic use
 - Publish findings on optimal intervention timing in self-paced learning
 
-## Built With
+## 💻 Built With
 
 Next.js • React • TypeScript • Node.js • Socket.IO • OpenCV.js • Google Gemini API • WebRTC • Web Speech API
 
