@@ -1,6 +1,8 @@
 ## 📚 StudyBuddy
 
-**An AI study companion that detects when you're confused or losing focus—and helps before you even ask.**
+**An AI study companion that detects when you're confused or losing focus, and helps before you even ask.**
+
+**Try StudyBuddy**: [Live Demo](https://attentive-tutor.lovable.app/) | [DevPost](https://devpost.com/software/studybuddy-21w574)  
 
 ## 💡 Inspiration
 
@@ -91,8 +93,6 @@ When it detects you're struggling, it proactively offers help. You can:
 
 ## 💻 Built With
 
-Next.js • React • TypeScript • Node.js • Socket.IO • OpenCV.js • Google Gemini API • WebRTC • Web Speech API
+Next.js • React • TypeScript • Node.js • Socket.IO • OpenCV.js • Google Gemini API • WebRTC • ElevenLabs API/Web Speech API
 
 ---
-
-**Try StudyBuddy**: [Live Demo](https://attentive-tutor.lovable.app/) | [DevPost](https://devpost.com/software/studybuddy-21w574)  
