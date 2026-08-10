@@ -1,16 +1,17 @@
 # dependencies
 node_modules/
-.pnp
-.pnp.js
+**/node_modules/
 
 # next.js / builds
 .next/
+**/.next/
 out/
 build/
 dist/
 *.tsbuildinfo
+next-env.d.ts
 
-# env / secrets
+# env / secrets — never commit real keys
 .env
 .env.*
 !.env.example
@@ -34,5 +35,10 @@ Thumbs.db
 # vercel / misc
 .vercel
 
-# leftover demo build dump (not source)
+# junk / local dumps
 Cursor StudyBuddy/
+backend/npx
+*.mp4
+*.webm
+uploads/
+tmp/
